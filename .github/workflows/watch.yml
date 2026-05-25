@@ -1,0 +1,56 @@
+name: watch
+
+on:
+  # 定期実行は Cloud Scheduler から workflow_dispatch を叩く構成。
+  # cron を併用したい場合は schedule トリガーを足す。
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore previous state from `state` branch
+        run: |
+          if git ls-remote --exit-code --heads origin state >/dev/null 2>&1; then
+            git fetch --depth=1 origin state
+            git show origin/state:state.json > state.json
+            echo "Restored state ($(wc -c < state.json) bytes)"
+          else
+            echo "No previous state branch — starting fresh."
+          fi
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run watcher
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: uv run jkkwatcher watch --state state.json
+
+      - name: Persist state to `state` branch
+        if: always() && hashFiles('state.json') != ''
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          tmp="$(mktemp -d)"
+          cp state.json "$tmp/"
+          cd "$tmp"
+          git init -q -b state
+          git add state.json
+          git commit -q -m "state @ $(date -u +%FT%TZ) (run #${{ github.run_number }})"
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git push -fq origin state

@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+# github_pat は環境変数で渡すのを推奨 (TF_VAR_github_pat=... terraform apply)。
+
+project_id = "your-gcp-project-id"
+# region = "asia-northeast1"
+# schedule = "*/15 * * * *"
