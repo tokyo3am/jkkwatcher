@@ -23,8 +23,14 @@ jobs:
         run: |
           if git ls-remote --exit-code --heads origin state >/dev/null 2>&1; then
             git fetch --depth=1 origin state
-            git show origin/state:state.json > state.json
-            echo "Restored state ($(wc -c < state.json) bytes)"
+            for f in state.json state-ur.json; do
+              if git cat-file -e "origin/state:$f" 2>/dev/null; then
+                git show "origin/state:$f" > "$f"
+                echo "Restored $f ($(wc -c < "$f") bytes)"
+              else
+                echo "$f not present on state branch — starting fresh."
+              fi
+            done
           else
             echo "No previous state branch — starting fresh."
           fi
@@ -36,21 +42,29 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      - name: Run watcher
+      - name: Run JKK watcher
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: uv run jkkwatcher watch --state state.json
+        run: uv run jkkwatcher jkk watch --state state.json
+
+      - name: Run UR watcher
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: uv run jkkwatcher ur watch --state state-ur.json
 
       - name: Persist state to `state` branch
-        if: always() && hashFiles('state.json') != ''
+        if: always() && (hashFiles('state.json') != '' || hashFiles('state-ur.json') != '')
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           tmp="$(mktemp -d)"
-          cp state.json "$tmp/"
+          for f in state.json state-ur.json; do
+            [ -f "$f" ] && cp "$f" "$tmp/"
+          done
           cd "$tmp"
           git init -q -b state
-          git add state.json
+          git add -A
           git commit -q -m "state @ $(date -u +%FT%TZ) (run #${{ github.run_number }})"
           git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
           git push -fq origin state
