@@ -3,21 +3,25 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable, Generic, TypeVar
 
-from .models import Property
+from .models import PropertyLike, Property, UrProperty
+
+
+P = TypeVar("P", bound=PropertyLike)
 
 
 @dataclass(frozen=True, slots=True)
-class Diff:
-    added: list[Property] = field(default_factory=list)
-    removed: list[Property] = field(default_factory=list)
+class Diff(Generic[P]):
+    added: list[P] = field(default_factory=list)
+    removed: list[P] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
         return not self.added and not self.removed
 
 
-def compute(previous: list[Property], current: list[Property]) -> Diff:
+def compute(previous: list[P], current: list[P]) -> Diff[P]:
     prev_map = {p.key: p for p in previous}
     curr_map = {p.key: p for p in current}
 
@@ -26,16 +30,25 @@ def compute(previous: list[Property], current: list[Property]) -> Diff:
     return Diff(added=added, removed=removed)
 
 
-def load_state(path: Path) -> list[Property]:
+def load_state(path: Path, factory: Callable[..., P]) -> list[P]:
     if not path.exists():
         return []
     data = json.loads(path.read_text(encoding="utf-8"))
-    return [Property(**item) for item in data]
+    return [factory(**item) for item in data]
 
 
-def save_state(path: Path, properties: list[Property]) -> None:
+def save_state(path: Path, properties: list[P]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps([p.to_dict() for p in properties], ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+# 互換関数: 既存の呼び出し (JKK Property を仮定) を壊さないために用意。
+def load_jkk_state(path: Path) -> list[Property]:
+    return load_state(path, Property)
+
+
+def load_ur_state(path: Path) -> list[UrProperty]:
+    return load_state(path, UrProperty)

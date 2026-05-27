@@ -5,13 +5,21 @@ from typing import Any
 import httpx
 
 from .diff import Diff
-from .models import Property
+from .models import Property, UrProperty
 from .scraper import INIT_URL
 
 # Slack のメッセージは最大 50 ブロック。物件カードが詰めても収まるよう、
 # 差分カードと現状リストの上限をそれぞれ別途絞る。
 MAX_DETAIL_CARDS = 8
 MAX_CURRENT_ROWS = 30
+
+# UR 検索結果ページ (フッターからリンクする用)
+UR_SEARCH_URL = (
+    "https://www.ur-net.go.jp/chintai/kanto/tokyo/result/"
+    "?area=01&skcs=102&area=02&skcs=108&skcs=121&skcs=122&skcs=118"
+    "&area=03&skcs=109&skcs=110&skcs=112&area=04&skcs=120&skcs=115"
+    "&area=05&skcs=119&tdfk=13&todofuken=tokyo"
+)
 
 
 def _property_card(prop: Property) -> list[dict[str, Any]]:
@@ -26,6 +34,31 @@ def _property_card(prop: Property) -> list[dict[str, Any]]:
             {"type": "mrkdwn", "text": f"*戸数*\n{prop.units}"},
             {"type": "mrkdwn", "text": f"*床面積*\n{prop.floor_area} m²"},
             {"type": "mrkdwn", "text": f"*家賃*\n{prop.rent} 円"},
+        ],
+    }
+    if prop.thumbnail_url:
+        section["accessory"] = {
+            "type": "image",
+            "image_url": prop.thumbnail_url,
+            "alt_text": prop.name,
+        }
+    return [section]
+
+
+def _ur_property_card(prop: UrProperty) -> list[dict[str, Any]]:
+    # 物件名は詳細ページへのリンクにする (UR は room_id 単位で URL が引ける)。
+    name_md = f"<{prop.detail_url}|{prop.name}>" if prop.detail_url else prop.name
+    section: dict[str, Any] = {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": f"*{name_md}*\n{prop.area}・{prop.room_no}・{prop.access}",
+        },
+        "fields": [
+            {"type": "mrkdwn", "text": f"*間取り*\n{prop.layout}"},
+            {"type": "mrkdwn", "text": f"*階*\n{prop.floor}"},
+            {"type": "mrkdwn", "text": f"*床面積*\n{prop.floor_area}"},
+            {"type": "mrkdwn", "text": f"*家賃*\n{prop.rent}"},
         ],
     }
     if prop.thumbnail_url:
@@ -52,6 +85,35 @@ def _truncated_cards(
     blocks: list[dict[str, Any]] = [header, {"type": "divider"}]
     for prop in items[:MAX_DETAIL_CARDS]:
         blocks.extend(_property_card(prop))
+        blocks.append({"type": "divider"})
+    if len(items) > MAX_DETAIL_CARDS:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"_他 {len(items) - MAX_DETAIL_CARDS} 件は省略_",
+                },
+            }
+        )
+    return blocks
+
+
+def _ur_truncated_cards(
+    label_emoji: str, label: str, items: list[UrProperty]
+) -> list[dict[str, Any]]:
+    if not items:
+        return []
+    header = {
+        "type": "header",
+        "text": {
+            "type": "plain_text",
+            "text": f"{label_emoji} {len(items)} {label}",
+        },
+    }
+    blocks: list[dict[str, Any]] = [header, {"type": "divider"}]
+    for prop in items[:MAX_DETAIL_CARDS]:
+        blocks.extend(_ur_property_card(prop))
         blocks.append({"type": "divider"})
     if len(items) > MAX_DETAIL_CARDS:
         blocks.append(
@@ -95,8 +157,40 @@ def _current_summary(current: list[Property]) -> list[dict[str, Any]]:
     ]
 
 
+def _ur_current_summary(current: list[UrProperty]) -> list[dict[str, Any]]:
+    header = {
+        "type": "header",
+        "text": {
+            "type": "plain_text",
+            "text": f":clipboard: 現在の UR 空室状況 {len(current)} 件",
+        },
+    }
+    if not current:
+        return [
+            header,
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "_該当物件なし_"},
+            },
+        ]
+
+    lines = []
+    for p in current[:MAX_CURRENT_ROWS]:
+        name_md = f"<{p.detail_url}|{p.name}>" if p.detail_url else p.name
+        lines.append(
+            f"• *{name_md}* ({p.area}) {p.room_no} / {p.layout} / "
+            f"{p.floor_area} / {p.rent}"
+        )
+    if len(current) > MAX_CURRENT_ROWS:
+        lines.append(f"_…他 {len(current) - MAX_CURRENT_ROWS} 件_")
+    return [
+        header,
+        {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}},
+    ]
+
+
 def build_payload(
-    diff: Diff,
+    diff: Diff[Property],
     current: list[Property],
     *,
     context_text: str | None = None,
@@ -119,6 +213,39 @@ def build_payload(
 
     summary = (
         f"JKK: 新着 {len(diff.added)}件 / 終了 {len(diff.removed)}件"
+        f" / 現在 {len(current)}件"
+    )
+    return {"text": summary, "blocks": blocks}
+
+
+def build_ur_payload(
+    diff: Diff[UrProperty],
+    current: list[UrProperty],
+    *,
+    context_text: str | None = None,
+) -> dict[str, Any]:
+    blocks: list[dict[str, Any]] = []
+    blocks.extend(
+        _ur_truncated_cards(":white_check_mark:", "件の新着 UR 物件があります", diff.added)
+    )
+    blocks.extend(
+        _ur_truncated_cards(":x:", "件の UR 物件が申し込まれました", diff.removed)
+    )
+    blocks.extend(_ur_current_summary(current))
+
+    footer_text = context_text or (
+        f"Triggered by <https://github.com/tokyo3am/jkkwatcher|jkkwatcher>"
+        f" · <{UR_SEARCH_URL}|UR で見る>"
+    )
+    blocks.append(
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": footer_text}],
+        }
+    )
+
+    summary = (
+        f"UR: 新着 {len(diff.added)}件 / 終了 {len(diff.removed)}件"
         f" / 現在 {len(current)}件"
     )
     return {"text": summary, "blocks": blocks}

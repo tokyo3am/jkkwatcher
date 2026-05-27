@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from enum import Enum
+from typing import Protocol, runtime_checkable
 
 
 KU_CODES: dict[str, str] = {
@@ -14,13 +15,43 @@ KU_CODES: dict[str, str] = {
 }
 
 
+# UR 「東京23区」の検索 URL に出てくる skcs (sub-area) コード一覧。
+# https://www.ur-net.go.jp/chintai/kanto/tokyo/result/?... の URL を 23 区
+# 5 ブロックに分解したもの。値は人間向けの名称。
+SKCS_CODES: dict[str, str] = {
+    "102": "千代田・中央",
+    "108": "新宿",
+    "118": "豊島・北・荒川",
+    "121": "文京",
+    "122": "台東・墨田・江東",
+    "109": "品川・目黒・大田",
+    "110": "渋谷・中野・杉並",
+    "112": "世田谷",
+    "115": "練馬",
+    "119": "板橋",
+    "120": "足立・葛飾・江戸川",
+}
+
+
 class Area(str, Enum):
     KU = "ku"
     SHI = "shi"
 
 
+@runtime_checkable
+class PropertyLike(Protocol):
+    """diff/notifier が物件を扱うために必要な最小インターフェース。"""
+
+    @property
+    def key(self) -> str: ...
+
+    def to_dict(self) -> dict[str, str | None]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class Property:
+    """JKK の物件 (先着順あき家)。"""
+
     name: str
     area: str
     priority_type: str
@@ -37,6 +68,37 @@ class Property:
     @property
     def key(self) -> str:
         return f"{self.residence_code}:{self.room_id}"
+
+    def to_dict(self) -> dict[str, str | None]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class UrProperty:
+    """UR の空き部屋。bukken (建物) と room (号室) を一行に flatten したもの。"""
+
+    name: str               # 物件名 (danchiNm)
+    area: str               # 住所から抽出した区 (例: "中央区")
+    address: str            # 物件住所 (place)
+    access: str             # アクセス (HTML タグを除去)
+    layout: str             # 間取り (type, 例: "1LDK")
+    floor_area: str         # 床面積 (floorspace)
+    floor: str              # 階 (floor)
+    rent: str               # 家賃 (例: "136,200円")
+    common_fee: str         # 共益費 (commonfee)
+    shisya: str             # 支社コード
+    danchi: str             # 団地コード
+    shikibetu: str          # 識別コード
+    room_id: str            # 部屋 ID (JKSS, 例: "000003712")
+    room_no: str            # 号室 (roomNo)
+    detail_url: str         # 詳細ページ URL (絶対)
+    thumbnail_url: str | None = None
+
+    @property
+    def key(self) -> str:
+        # 建物単位 + 部屋 ID で一意。room_id (JKSS) は基本ユニークだが
+        # 念のため建物のコンパウンドキーを前置する。
+        return f"UR:{self.shisya}_{self.danchi}_{self.shikibetu}:{self.room_id}"
 
     def to_dict(self) -> dict[str, str | None]:
         return asdict(self)
