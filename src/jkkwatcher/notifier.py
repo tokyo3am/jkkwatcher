@@ -21,6 +21,29 @@ UR_SEARCH_URL = (
     "&area=05&skcs=119&tdfk=13&todofuken=tokyo"
 )
 
+# Slack の Incoming Webhook で表示する送信者名・アイコン。
+# 同じチャンネルに JKK と UR の通知が並んだとき、見た目で識別できるよう
+# 別の bot として表示させる。
+# (Slack 側で webhook を作ったアプリに chat:write.customize スコープが
+#  無い場合、これらは無視される。その場合はワークスペース管理者が
+#  アプリの設定を見直すか、2 つの webhook URL を使い分ける必要がある。)
+JKK_BOT_USERNAME = "JKK Watcher"
+JKK_BOT_ICON_EMOJI = ":classical_building:"  # 🏛️
+UR_BOT_USERNAME = "UR Watcher"
+UR_BOT_ICON_EMOJI = ":office:"  # 🏢
+
+
+def _header(prefix: str, emoji: str, text: str) -> dict[str, Any]:
+    """header block の生成。prefix で [JKK] / [UR] を付ける。"""
+    return {
+        "type": "header",
+        "text": {
+            "type": "plain_text",
+            "text": f"{prefix} {emoji} {text}",
+            "emoji": True,
+        },
+    }
+
 
 def _property_card(prop: Property) -> list[dict[str, Any]]:
     section: dict[str, Any] = {
@@ -71,18 +94,14 @@ def _ur_property_card(prop: UrProperty) -> list[dict[str, Any]]:
 
 
 def _truncated_cards(
-    label_emoji: str, label: str, items: list[Property]
+    prefix: str, label_emoji: str, label: str, items: list[Property]
 ) -> list[dict[str, Any]]:
     if not items:
         return []
-    header = {
-        "type": "header",
-        "text": {
-            "type": "plain_text",
-            "text": f"{label_emoji} {len(items)} {label}",
-        },
-    }
-    blocks: list[dict[str, Any]] = [header, {"type": "divider"}]
+    blocks: list[dict[str, Any]] = [
+        _header(prefix, label_emoji, f"{len(items)} {label}"),
+        {"type": "divider"},
+    ]
     for prop in items[:MAX_DETAIL_CARDS]:
         blocks.extend(_property_card(prop))
         blocks.append({"type": "divider"})
@@ -100,18 +119,14 @@ def _truncated_cards(
 
 
 def _ur_truncated_cards(
-    label_emoji: str, label: str, items: list[UrProperty]
+    prefix: str, label_emoji: str, label: str, items: list[UrProperty]
 ) -> list[dict[str, Any]]:
     if not items:
         return []
-    header = {
-        "type": "header",
-        "text": {
-            "type": "plain_text",
-            "text": f"{label_emoji} {len(items)} {label}",
-        },
-    }
-    blocks: list[dict[str, Any]] = [header, {"type": "divider"}]
+    blocks: list[dict[str, Any]] = [
+        _header(prefix, label_emoji, f"{len(items)} {label}"),
+        {"type": "divider"},
+    ]
     for prop in items[:MAX_DETAIL_CARDS]:
         blocks.extend(_ur_property_card(prop))
         blocks.append({"type": "divider"})
@@ -129,13 +144,7 @@ def _ur_truncated_cards(
 
 
 def _current_summary(current: list[Property]) -> list[dict[str, Any]]:
-    header = {
-        "type": "header",
-        "text": {
-            "type": "plain_text",
-            "text": f":clipboard: 現在の空室状況 {len(current)} 件",
-        },
-    }
+    header = _header("[JKK]", ":clipboard:", f"現在の空室状況 {len(current)} 件")
     if not current:
         return [
             header,
@@ -158,13 +167,7 @@ def _current_summary(current: list[Property]) -> list[dict[str, Any]]:
 
 
 def _ur_current_summary(current: list[UrProperty]) -> list[dict[str, Any]]:
-    header = {
-        "type": "header",
-        "text": {
-            "type": "plain_text",
-            "text": f":clipboard: 現在の UR 空室状況 {len(current)} 件",
-        },
-    }
+    header = _header("[UR]", ":clipboard:", f"現在の空室状況 {len(current)} 件")
     if not current:
         return [
             header,
@@ -196,8 +199,16 @@ def build_payload(
     context_text: str | None = None,
 ) -> dict[str, Any]:
     blocks: list[dict[str, Any]] = []
-    blocks.extend(_truncated_cards(":white_check_mark:", "件の新着物件があります", diff.added))
-    blocks.extend(_truncated_cards(":x:", "件の物件が申し込まれました", diff.removed))
+    blocks.extend(
+        _truncated_cards(
+            "[JKK]", ":white_check_mark:", "件の新着物件があります", diff.added
+        )
+    )
+    blocks.extend(
+        _truncated_cards(
+            "[JKK]", ":x:", "件の物件が申し込まれました", diff.removed
+        )
+    )
     blocks.extend(_current_summary(current))
 
     footer_text = context_text or (
@@ -212,10 +223,15 @@ def build_payload(
     )
 
     summary = (
-        f"JKK: 新着 {len(diff.added)}件 / 終了 {len(diff.removed)}件"
+        f"[JKK] 新着 {len(diff.added)}件 / 終了 {len(diff.removed)}件"
         f" / 現在 {len(current)}件"
     )
-    return {"text": summary, "blocks": blocks}
+    return {
+        "username": JKK_BOT_USERNAME,
+        "icon_emoji": JKK_BOT_ICON_EMOJI,
+        "text": summary,
+        "blocks": blocks,
+    }
 
 
 def build_ur_payload(
@@ -226,10 +242,14 @@ def build_ur_payload(
 ) -> dict[str, Any]:
     blocks: list[dict[str, Any]] = []
     blocks.extend(
-        _ur_truncated_cards(":white_check_mark:", "件の新着 UR 物件があります", diff.added)
+        _ur_truncated_cards(
+            "[UR]", ":white_check_mark:", "件の新着物件があります", diff.added
+        )
     )
     blocks.extend(
-        _ur_truncated_cards(":x:", "件の UR 物件が申し込まれました", diff.removed)
+        _ur_truncated_cards(
+            "[UR]", ":x:", "件の物件が申し込まれました", diff.removed
+        )
     )
     blocks.extend(_ur_current_summary(current))
 
@@ -245,10 +265,15 @@ def build_ur_payload(
     )
 
     summary = (
-        f"UR: 新着 {len(diff.added)}件 / 終了 {len(diff.removed)}件"
+        f"[UR] 新着 {len(diff.added)}件 / 終了 {len(diff.removed)}件"
         f" / 現在 {len(current)}件"
     )
-    return {"text": summary, "blocks": blocks}
+    return {
+        "username": UR_BOT_USERNAME,
+        "icon_emoji": UR_BOT_ICON_EMOJI,
+        "text": summary,
+        "blocks": blocks,
+    }
 
 
 def notify(webhook_url: str, payload: dict[str, Any], *, timeout: float = 10.0) -> None:
