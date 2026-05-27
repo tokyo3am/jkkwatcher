@@ -137,15 +137,19 @@ class UrScraper:
                 )
             results.extend(data)
 
-            # サーバ側のページングを尊重する。pageMax を超えたら抜ける。
-            first = data[0]
+            # allCount は実際の総件数。pageMax はサーバ側のデフォルト pageSize
+            # (=10) を仮定した値なので、pageSize を大きくしている我々の用途では
+            # 当てにできない。
             try:
-                page_max = int(first.get("pageMax") or 0)
+                all_count = int(data[0].get("allCount") or 0)
             except (TypeError, ValueError):
-                page_max = 0
-            page += 1
-            if page >= page_max:
+                all_count = 0
+            if all_count <= 0 or len(results) >= all_count:
                 break
+            # サーバが返したデータ件数が 0 件だと無限ループするので保険。
+            if len(data) == 0:
+                break
+            page += 1
         return results
 
     def _fetch_rooms(
