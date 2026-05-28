@@ -15,6 +15,7 @@ from .models import KU_CODES, SKCS_CODES, Area, Property, SuumoProperty, UrPrope
 from .scraper import JkkScraper
 from .suumo_scraper import DEFAULT_SEARCH_URL as SUUMO_DEFAULT_URL, SuumoScraper
 from .ur_scraper import UrScraper
+from .watchlist import NotifyConfig
 
 
 class OutputFormat(str, Enum):
@@ -134,6 +135,7 @@ def jkk_watch(
 ) -> None:
     """JKK の空き物件を取得し、前回 state との差分があれば Slack に通知する。"""
     console = Console(stderr=True)
+    notify_config = NotifyConfig.from_env()
     with JkkScraper() as scraper:
         with console.status("[cyan]JKKねっとに問い合わせ中..."):
             current = scraper.search(ku_codes=ku, area=area)
@@ -151,7 +153,7 @@ def jkk_watch(
             diff_mod.save_state(state, current)
         return
 
-    payload = notifier.build_payload(delta, current)
+    payload = notifier.build_payload(delta, current, notify_config=notify_config)
     if dry_run:
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
         return
@@ -166,6 +168,32 @@ def jkk_watch(
     notifier.notify(webhook, payload)
     console.print("[green]Slack に通知しました。")
     diff_mod.save_state(state, current)
+
+
+@jkk_app.command("ids")
+def jkk_ids(
+    area: Annotated[
+        Area, typer.Option("--area", "-a", help="検索エリア (ku=区部 / shi=市部)")
+    ] = Area.KU,
+    ku: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--ku",
+            "-k",
+            help="区コード (例: 12 で世田谷区のみ)。複数可。未指定時は全区。",
+            callback=_validate_ku_codes,
+        ),
+    ] = None,
+    output: Annotated[
+        OutputFormat, typer.Option("--output", "-o", help="出力形式")
+    ] = OutputFormat.TABLE,
+) -> None:
+    """JKK の建物 key 一覧を出力する (watchlist 作成用)。"""
+    console = Console()
+    with JkkScraper() as scraper:
+        with console.status("[cyan]JKKねっとに問い合わせ中..."):
+            properties = scraper.search(ku_codes=ku, area=area)
+    _render_building_ids(properties, output, console)
 
 
 @jkk_app.command("diff")
@@ -265,6 +293,7 @@ def ur_watch(
 ) -> None:
     """UR の空き部屋を取得し、前回 state との差分があれば Slack に通知する。"""
     console = Console(stderr=True)
+    notify_config = NotifyConfig.from_env()
     with UrScraper() as scraper:
         with console.status("[cyan]UR-net に問い合わせ中..."):
             current = scraper.search(skcs_codes=skcs)
@@ -282,7 +311,7 @@ def ur_watch(
             diff_mod.save_state(state, current)
         return
 
-    payload = notifier.build_ur_payload(delta, current)
+    payload = notifier.build_ur_payload(delta, current, notify_config=notify_config)
     if dry_run:
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
         return
@@ -297,6 +326,31 @@ def ur_watch(
     notifier.notify(webhook, payload)
     console.print("[green]Slack に通知しました。")
     diff_mod.save_state(state, current)
+
+
+@ur_app.command("ids")
+def ur_ids(
+    skcs: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--skcs",
+            help=(
+                "UR の skcs (sub-area) コード。複数可。未指定時は東京23区相当の全コード。"
+                f" 有効値: {list(SKCS_CODES.keys())}"
+            ),
+            callback=_validate_skcs_codes,
+        ),
+    ] = None,
+    output: Annotated[
+        OutputFormat, typer.Option("--output", "-o", help="出力形式")
+    ] = OutputFormat.TABLE,
+) -> None:
+    """UR の建物 key 一覧を出力する (watchlist 作成用)。"""
+    console = Console()
+    with UrScraper() as scraper:
+        with console.status("[cyan]UR-net に問い合わせ中..."):
+            properties = scraper.search(skcs_codes=skcs)
+    _render_building_ids(properties, output, console)
 
 
 @ur_app.command("diff")
@@ -384,6 +438,7 @@ def suumo_watch(
 ) -> None:
     """Suumo の空き部屋を取得し、前回 state との差分があれば Slack に通知する。"""
     console = Console(stderr=True)
+    notify_config = NotifyConfig.from_env()
     with SuumoScraper(search_url=url) as scraper:
         with console.status("[cyan]Suumo に問い合わせ中..."):
             current = scraper.search()
@@ -401,7 +456,7 @@ def suumo_watch(
             diff_mod.save_state(state, current)
         return
 
-    payload = notifier.build_suumo_payload(delta, current)
+    payload = notifier.build_suumo_payload(delta, current, notify_config=notify_config)
     if dry_run:
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
         return
@@ -416,6 +471,27 @@ def suumo_watch(
     notifier.notify(webhook, payload)
     console.print("[green]Slack に通知しました。")
     diff_mod.save_state(state, current)
+
+
+@suumo_app.command("ids")
+def suumo_ids(
+    url: Annotated[
+        str,
+        typer.Option(
+            "--url",
+            help="Suumo 検索 URL。未指定時は組み込みのデフォルト URL を使用。",
+        ),
+    ] = SUUMO_DEFAULT_URL,
+    output: Annotated[
+        OutputFormat, typer.Option("--output", "-o", help="出力形式")
+    ] = OutputFormat.TABLE,
+) -> None:
+    """Suumo の建物 key 一覧を出力する (watchlist 作成用)。"""
+    console = Console()
+    with SuumoScraper(search_url=url) as scraper:
+        with console.status("[cyan]Suumo に問い合わせ中..."):
+            properties = scraper.search()
+    _render_building_ids(properties, output, console)
 
 
 @suumo_app.command("diff")
@@ -447,6 +523,41 @@ def suumo_diff(
 
 
 # ---------- renderers ----------
+
+
+def _render_building_ids(
+    properties: list[Property] | list[UrProperty] | list[SuumoProperty],
+    output: OutputFormat,
+    console: Console,
+) -> None:
+    # building_key 単位で 1 件にまとめる (同じ建物の複数部屋は集約)。
+    seen: dict[str, tuple[str, str]] = {}
+    for p in properties:
+        if p.building_key not in seen:
+            seen[p.building_key] = (p.name, p.area)
+
+    if output is OutputFormat.JSON:
+        typer.echo(
+            json.dumps(
+                [
+                    {"building_key": k, "name": n, "area": a}
+                    for k, (n, a) in seen.items()
+                ],
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+    if not seen:
+        console.print("[yellow]該当物件はありません。")
+        return
+    table = Table(title=f"建物 ID 一覧 ({len(seen)} 件)")
+    table.add_column("建物 Key", style="cyan", no_wrap=True)
+    table.add_column("物件名")
+    table.add_column("地域", style="magenta")
+    for k, (n, a) in seen.items():
+        table.add_row(k, n, a)
+    console.print(table)
 
 
 def _render_jkk(

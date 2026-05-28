@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypeVar
 
 import httpx
 
 from .diff import Diff
-from .models import Property, SuumoProperty, UrProperty
+from .models import Property, PropertyLike, SuumoProperty, UrProperty
 from .scraper import INIT_URL
 from .suumo_scraper import DEFAULT_SEARCH_URL as SUUMO_SEARCH_URL
+from .watchlist import NotifyConfig, Source
+
+P = TypeVar("P", bound=PropertyLike)
 
 # Slack のメッセージは最大 50 ブロック。物件カードが詰めても収まるよう、
 # 差分カードと現状リストの上限をそれぞれ別途絞る。
@@ -46,6 +49,41 @@ def _header(prefix: str, emoji: str, text: str) -> dict[str, Any]:
             "emoji": True,
         },
     }
+
+
+def _mention_banner(reason: str) -> dict[str, Any]:
+    # header block は plain_text 専用なので <!channel> が解釈されない。
+    # section + mrkdwn で出すと UI 上にもメンションが表示される。
+    return {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": f"<!channel> :bell: *{reason}*",
+        },
+    }
+
+
+def _split_added(
+    added: list[P], cfg: NotifyConfig, source: Source
+) -> tuple[list[P], list[P]]:
+    hits: list[P] = []
+    others: list[P] = []
+    for p in added:
+        (hits if cfg.is_hit(source, p) else others).append(p)
+    return hits, others
+
+
+def _mention_decision(
+    cfg: NotifyConfig, added_count: int, hit_count: int
+) -> tuple[bool, str | None]:
+    """(should_mention, reason). hit を added より優先 (より specific)。"""
+    if added_count == 0:
+        return False, None
+    if cfg.mention_on_watch_hit and hit_count > 0:
+        return True, f"ウォッチリストに空きが出ました ({hit_count} 件)"
+    if cfg.mention_on_added:
+        return True, f"新着 {added_count} 件"
+    return False, None
 
 
 def _property_card(prop: Property) -> list[dict[str, Any]]:
@@ -200,13 +238,27 @@ def build_payload(
     current: list[Property],
     *,
     context_text: str | None = None,
+    notify_config: NotifyConfig | None = None,
 ) -> dict[str, Any]:
+    cfg = notify_config or NotifyConfig()
+    hits, others = _split_added(diff.added, cfg, "jkk")
+    should_mention, reason = _mention_decision(cfg, len(diff.added), len(hits))
+
     blocks: list[dict[str, Any]] = []
-    blocks.extend(
-        _truncated_cards(
-            "[JKK]", ":white_check_mark:", "件の新着物件があります", diff.added
+    if should_mention and reason:
+        blocks.append(_mention_banner(reason))
+    if hits:
+        blocks.extend(
+            _truncated_cards(
+                "[JKK]", ":bell:", "件のウォッチ一致物件があります", hits
+            )
         )
-    )
+    if others:
+        blocks.extend(
+            _truncated_cards(
+                "[JKK]", ":white_check_mark:", "件の新着物件があります", others
+            )
+        )
     blocks.extend(
         _truncated_cards(
             "[JKK]", ":x:", "件の物件が申し込まれました", diff.removed
@@ -225,9 +277,10 @@ def build_payload(
         }
     )
 
+    summary_prefix = "<!channel> " if should_mention else ""
     summary = (
-        f"[JKK] 新着 {len(diff.added)}件 / 終了 {len(diff.removed)}件"
-        f" / 現在 {len(current)}件"
+        f"{summary_prefix}[JKK] 新着 {len(diff.added)}件"
+        f" / 終了 {len(diff.removed)}件 / 現在 {len(current)}件"
     )
     return {
         "username": JKK_BOT_USERNAME,
@@ -242,13 +295,27 @@ def build_ur_payload(
     current: list[UrProperty],
     *,
     context_text: str | None = None,
+    notify_config: NotifyConfig | None = None,
 ) -> dict[str, Any]:
+    cfg = notify_config or NotifyConfig()
+    hits, others = _split_added(diff.added, cfg, "ur")
+    should_mention, reason = _mention_decision(cfg, len(diff.added), len(hits))
+
     blocks: list[dict[str, Any]] = []
-    blocks.extend(
-        _ur_truncated_cards(
-            "[UR]", ":white_check_mark:", "件の新着物件があります", diff.added
+    if should_mention and reason:
+        blocks.append(_mention_banner(reason))
+    if hits:
+        blocks.extend(
+            _ur_truncated_cards(
+                "[UR]", ":bell:", "件のウォッチ一致物件があります", hits
+            )
         )
-    )
+    if others:
+        blocks.extend(
+            _ur_truncated_cards(
+                "[UR]", ":white_check_mark:", "件の新着物件があります", others
+            )
+        )
     blocks.extend(
         _ur_truncated_cards(
             "[UR]", ":x:", "件の物件が申し込まれました", diff.removed
@@ -267,9 +334,10 @@ def build_ur_payload(
         }
     )
 
+    summary_prefix = "<!channel> " if should_mention else ""
     summary = (
-        f"[UR] 新着 {len(diff.added)}件 / 終了 {len(diff.removed)}件"
-        f" / 現在 {len(current)}件"
+        f"{summary_prefix}[UR] 新着 {len(diff.added)}件"
+        f" / 終了 {len(diff.removed)}件 / 現在 {len(current)}件"
     )
     return {
         "username": UR_BOT_USERNAME,
@@ -359,13 +427,27 @@ def build_suumo_payload(
     current: list[SuumoProperty],
     *,
     context_text: str | None = None,
+    notify_config: NotifyConfig | None = None,
 ) -> dict[str, Any]:
+    cfg = notify_config or NotifyConfig()
+    hits, others = _split_added(diff.added, cfg, "suumo")
+    should_mention, reason = _mention_decision(cfg, len(diff.added), len(hits))
+
     blocks: list[dict[str, Any]] = []
-    blocks.extend(
-        _suumo_truncated_cards(
-            "[Suumo]", ":white_check_mark:", "件の新着物件があります", diff.added
+    if should_mention and reason:
+        blocks.append(_mention_banner(reason))
+    if hits:
+        blocks.extend(
+            _suumo_truncated_cards(
+                "[Suumo]", ":bell:", "件のウォッチ一致物件があります", hits
+            )
         )
-    )
+    if others:
+        blocks.extend(
+            _suumo_truncated_cards(
+                "[Suumo]", ":white_check_mark:", "件の新着物件があります", others
+            )
+        )
     blocks.extend(
         _suumo_truncated_cards(
             "[Suumo]", ":x:", "件の物件が掲載終了しました", diff.removed
@@ -384,9 +466,10 @@ def build_suumo_payload(
         }
     )
 
+    summary_prefix = "<!channel> " if should_mention else ""
     summary = (
-        f"[Suumo] 新着 {len(diff.added)}件 / 終了 {len(diff.removed)}件"
-        f" / 現在 {len(current)}件"
+        f"{summary_prefix}[Suumo] 新着 {len(diff.added)}件"
+        f" / 終了 {len(diff.removed)}件 / 現在 {len(current)}件"
     )
     return {
         "username": SUUMO_BOT_USERNAME,

@@ -54,18 +54,21 @@ jobs:
         if: contains(format(',{0},', inputs.targets), ',jkk,')
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          JKKWATCHER_CONFIG_JSON: ${{ vars.JKKWATCHER_CONFIG_JSON }}
         run: uv run jkkwatcher jkk watch --state state.json
 
       - name: Run UR watcher
         if: always() && contains(format(',{0},', inputs.targets), ',ur,')
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          JKKWATCHER_CONFIG_JSON: ${{ vars.JKKWATCHER_CONFIG_JSON }}
         run: uv run jkkwatcher ur watch --state state-ur.json
 
       - name: Run Suumo watcher
         if: always() && contains(format(',{0},', inputs.targets), ',suumo,')
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          JKKWATCHER_CONFIG_JSON: ${{ vars.JKKWATCHER_CONFIG_JSON }}
         run: uv run jkkwatcher suumo watch --state state-suumo.json
 
       - name: Persist state to `state` branch

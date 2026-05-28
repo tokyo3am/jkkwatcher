@@ -45,6 +45,12 @@ class PropertyLike(Protocol):
     @property
     def key(self) -> str: ...
 
+    @property
+    def building_key(self) -> str: ...
+
+    @property
+    def name(self) -> str: ...
+
     def to_dict(self) -> dict[str, str | None]: ...
 
 
@@ -68,6 +74,10 @@ class Property:
     @property
     def key(self) -> str:
         return f"{self.residence_code}:{self.room_id}"
+
+    @property
+    def building_key(self) -> str:
+        return self.residence_code
 
     def to_dict(self) -> dict[str, str | None]:
         return asdict(self)
@@ -100,6 +110,10 @@ class UrProperty:
         # 念のため建物のコンパウンドキーを前置する。
         return f"UR:{self.shisya}_{self.danchi}_{self.shikibetu}:{self.room_id}"
 
+    @property
+    def building_key(self) -> str:
+        return f"{self.shisya}_{self.danchi}_{self.shikibetu}"
+
     def to_dict(self) -> dict[str, str | None]:
         return asdict(self)
 
@@ -128,6 +142,10 @@ class SuumoProperty:
     def key(self) -> str:
         # jnc 単独でも実質一意だが、UR と揃えて建物 + 部屋の複合キーにする。
         return f"SUUMO:{self.bc}:{self.jnc}"
+
+    @property
+    def building_key(self) -> str:
+        return self.bc
 
     def to_dict(self) -> dict[str, str | None]:
         return asdict(self)

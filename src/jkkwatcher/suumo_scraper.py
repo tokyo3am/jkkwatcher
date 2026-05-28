@@ -66,7 +66,9 @@ def _img_url(img: Tag | None) -> str | None:
     for attr in ("data-src", "rel", "data-original", "src"):
         v = img.get(attr)
         if v and not v.startswith("data:"):
-            return v
+            # Slack の image_url は絶対 URL 必須。プレースホルダは
+            # `/edit/assets/...` のような相対 URL で返るため絶対化する。
+            return _absolute(v)
     return None
 
 
