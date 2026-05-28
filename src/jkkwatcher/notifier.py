@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, TypeVar
+from dataclasses import dataclass
+from typing import Any, Callable, TypeVar
 
 import httpx
 
@@ -12,31 +13,14 @@ from .watchlist import NotifyConfig, Source
 
 P = TypeVar("P", bound=PropertyLike)
 
-# Slack のメッセージは最大 50 ブロック。物件カードが詰めても収まるよう、
-# 差分カードと現状リストの上限をそれぞれ別途絞る。
-MAX_DETAIL_CARDS = 8
-MAX_CURRENT_ROWS = 30
-# Slack の section block 内 mrkdwn text は 3000 文字上限。URL 付きの行を
-# 30 行並べると Suumo は超える (invalid_blocks エラー) ので動的に切り詰める。
+# Slack の上限 (Block Kit ドキュメント由来)
+SLACK_MAX_BLOCKS = 50
+BLOCKS_SAFE_LIMIT = 45  # 余裕 5
 SECTION_TEXT_LIMIT = 3000
+SECTION_TEXT_SAFE_LIMIT = 2900  # 余裕 100 (改行・末尾装飾を考慮)
 
-
-def _join_lines_within_limit(lines: list[str]) -> str:
-    """3000 char 上限内に収まるよう join し、超える分は末尾に省略文を付ける。"""
-    full = "\n".join(lines)
-    if len(full) <= SECTION_TEXT_LIMIT:
-        return full
-    # 省略文の余裕として 40 chars 確保しつつ詰める。
-    reserve = 40
-    out: list[str] = []
-    size = 0
-    for i, line in enumerate(lines):
-        addition = len(line) + (1 if out else 0)
-        if size + addition + reserve > SECTION_TEXT_LIMIT:
-            return "\n".join(out) + f"\n_…他 {len(lines) - i} 件_"
-        out.append(line)
-        size += addition
-    return "\n".join(out)
+# 新着/終了/ウォッチ一致セクションでの card 上限 (1 セクション内)
+MAX_DETAIL_CARDS = 8
 
 # UR 検索結果ページ (フッターからリンクする用)
 UR_SEARCH_URL = (
@@ -60,8 +44,10 @@ SUUMO_BOT_USERNAME = "Suumo Watcher"
 SUUMO_BOT_ICON_EMOJI = ":house:"  # 🏠
 
 
+# ---------- 共通ブロックヘルパー ----------
+
+
 def _header(prefix: str, emoji: str, text: str) -> dict[str, Any]:
-    """header block の生成。prefix で [JKK] / [UR] を付ける。"""
     return {
         "type": "header",
         "text": {
@@ -72,42 +58,27 @@ def _header(prefix: str, emoji: str, text: str) -> dict[str, Any]:
     }
 
 
+def _divider() -> dict[str, Any]:
+    return {"type": "divider"}
+
+
 def _mention_banner(reason: str) -> dict[str, Any]:
     # header block は plain_text 専用なので <!channel> が解釈されない。
     # section + mrkdwn で出すと UI 上にもメンションが表示される。
     return {
         "type": "section",
-        "text": {
-            "type": "mrkdwn",
-            "text": f"<!channel> :bell: *{reason}*",
-        },
+        "text": {"type": "mrkdwn", "text": f"<!channel> :bell: *{reason}*"},
     }
 
 
-def _split_added(
-    added: list[P], cfg: NotifyConfig, source: Source
-) -> tuple[list[P], list[P]]:
-    hits: list[P] = []
-    others: list[P] = []
-    for p in added:
-        (hits if cfg.is_hit(source, p) else others).append(p)
-    return hits, others
+def _context_footer(text: str) -> dict[str, Any]:
+    return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
 
 
-def _mention_decision(
-    cfg: NotifyConfig, added_count: int, hit_count: int
-) -> tuple[bool, str | None]:
-    """(should_mention, reason). hit を added より優先 (より specific)。"""
-    if added_count == 0:
-        return False, None
-    if cfg.mention_on_watch_hit and hit_count > 0:
-        return True, f"ウォッチリストに空きが出ました ({hit_count} 件)"
-    if cfg.mention_on_added:
-        return True, f"新着 {added_count} 件"
-    return False, None
+# ---------- カードフォーマッタ (ソース別) ----------
 
 
-def _property_card(prop: Property) -> list[dict[str, Any]]:
+def _jkk_card(prop: Property) -> list[dict[str, Any]]:
     section: dict[str, Any] = {
         "type": "section",
         "text": {
@@ -130,8 +101,7 @@ def _property_card(prop: Property) -> list[dict[str, Any]]:
     return [section]
 
 
-def _ur_property_card(prop: UrProperty) -> list[dict[str, Any]]:
-    # 物件名は詳細ページへのリンクにする (UR は room_id 単位で URL が引ける)。
+def _ur_card(prop: UrProperty) -> list[dict[str, Any]]:
     name_md = f"<{prop.detail_url}|{prop.name}>" if prop.detail_url else prop.name
     section: dict[str, Any] = {
         "type": "section",
@@ -155,220 +125,7 @@ def _ur_property_card(prop: UrProperty) -> list[dict[str, Any]]:
     return [section]
 
 
-def _truncated_cards(
-    prefix: str, label_emoji: str, label: str, items: list[Property]
-) -> list[dict[str, Any]]:
-    if not items:
-        return []
-    blocks: list[dict[str, Any]] = [
-        _header(prefix, label_emoji, f"{len(items)} {label}"),
-        {"type": "divider"},
-    ]
-    for prop in items[:MAX_DETAIL_CARDS]:
-        blocks.extend(_property_card(prop))
-        blocks.append({"type": "divider"})
-    if len(items) > MAX_DETAIL_CARDS:
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"_他 {len(items) - MAX_DETAIL_CARDS} 件は省略_",
-                },
-            }
-        )
-    return blocks
-
-
-def _ur_truncated_cards(
-    prefix: str, label_emoji: str, label: str, items: list[UrProperty]
-) -> list[dict[str, Any]]:
-    if not items:
-        return []
-    blocks: list[dict[str, Any]] = [
-        _header(prefix, label_emoji, f"{len(items)} {label}"),
-        {"type": "divider"},
-    ]
-    for prop in items[:MAX_DETAIL_CARDS]:
-        blocks.extend(_ur_property_card(prop))
-        blocks.append({"type": "divider"})
-    if len(items) > MAX_DETAIL_CARDS:
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"_他 {len(items) - MAX_DETAIL_CARDS} 件は省略_",
-                },
-            }
-        )
-    return blocks
-
-
-def _current_summary(current: list[Property]) -> list[dict[str, Any]]:
-    header = _header("[JKK]", ":clipboard:", f"現在の空室状況 {len(current)} 件")
-    if not current:
-        return [
-            header,
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": "_該当物件なし_"},
-            },
-        ]
-
-    lines = [
-        f"• *{p.name}* ({p.area}) {p.layout} / {p.floor_area} m² / {p.rent} 円 / {p.units} 戸"
-        for p in current[:MAX_CURRENT_ROWS]
-    ]
-    if len(current) > MAX_CURRENT_ROWS:
-        lines.append(f"_…他 {len(current) - MAX_CURRENT_ROWS} 件_")
-    return [
-        header,
-        {"type": "section", "text": {"type": "mrkdwn", "text": _join_lines_within_limit(lines)}},
-    ]
-
-
-def _ur_current_summary(current: list[UrProperty]) -> list[dict[str, Any]]:
-    header = _header("[UR]", ":clipboard:", f"現在の空室状況 {len(current)} 件")
-    if not current:
-        return [
-            header,
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": "_該当物件なし_"},
-            },
-        ]
-
-    lines = []
-    for p in current[:MAX_CURRENT_ROWS]:
-        name_md = f"<{p.detail_url}|{p.name}>" if p.detail_url else p.name
-        lines.append(
-            f"• *{name_md}* ({p.area}) {p.room_no} / {p.layout} / "
-            f"{p.floor_area} / {p.rent}"
-        )
-    if len(current) > MAX_CURRENT_ROWS:
-        lines.append(f"_…他 {len(current) - MAX_CURRENT_ROWS} 件_")
-    return [
-        header,
-        {"type": "section", "text": {"type": "mrkdwn", "text": _join_lines_within_limit(lines)}},
-    ]
-
-
-def build_payload(
-    diff: Diff[Property],
-    current: list[Property],
-    *,
-    context_text: str | None = None,
-    notify_config: NotifyConfig | None = None,
-) -> dict[str, Any]:
-    cfg = notify_config or NotifyConfig()
-    hits, others = _split_added(diff.added, cfg, "jkk")
-    should_mention, reason = _mention_decision(cfg, len(diff.added), len(hits))
-
-    blocks: list[dict[str, Any]] = []
-    if should_mention and reason:
-        blocks.append(_mention_banner(reason))
-    if hits:
-        blocks.extend(
-            _truncated_cards(
-                "[JKK]", ":bell:", "件のウォッチ一致物件があります", hits
-            )
-        )
-    if others:
-        blocks.extend(
-            _truncated_cards(
-                "[JKK]", ":white_check_mark:", "件の新着物件があります", others
-            )
-        )
-    blocks.extend(
-        _truncated_cards(
-            "[JKK]", ":x:", "件の物件が申し込まれました", diff.removed
-        )
-    )
-    blocks.extend(_current_summary(current))
-
-    footer_text = context_text or (
-        f"Triggered by <https://github.com/tokyo3am/jkkwatcher|jkkwatcher>"
-        f" · <{INIT_URL}|JKK で見る>"
-    )
-    blocks.append(
-        {
-            "type": "context",
-            "elements": [{"type": "mrkdwn", "text": footer_text}],
-        }
-    )
-
-    summary_prefix = "<!channel> " if should_mention else ""
-    summary = (
-        f"{summary_prefix}[JKK] 新着 {len(diff.added)}件"
-        f" / 終了 {len(diff.removed)}件 / 現在 {len(current)}件"
-    )
-    return {
-        "username": JKK_BOT_USERNAME,
-        "icon_emoji": JKK_BOT_ICON_EMOJI,
-        "text": summary,
-        "blocks": blocks,
-    }
-
-
-def build_ur_payload(
-    diff: Diff[UrProperty],
-    current: list[UrProperty],
-    *,
-    context_text: str | None = None,
-    notify_config: NotifyConfig | None = None,
-) -> dict[str, Any]:
-    cfg = notify_config or NotifyConfig()
-    hits, others = _split_added(diff.added, cfg, "ur")
-    should_mention, reason = _mention_decision(cfg, len(diff.added), len(hits))
-
-    blocks: list[dict[str, Any]] = []
-    if should_mention and reason:
-        blocks.append(_mention_banner(reason))
-    if hits:
-        blocks.extend(
-            _ur_truncated_cards(
-                "[UR]", ":bell:", "件のウォッチ一致物件があります", hits
-            )
-        )
-    if others:
-        blocks.extend(
-            _ur_truncated_cards(
-                "[UR]", ":white_check_mark:", "件の新着物件があります", others
-            )
-        )
-    blocks.extend(
-        _ur_truncated_cards(
-            "[UR]", ":x:", "件の物件が申し込まれました", diff.removed
-        )
-    )
-    blocks.extend(_ur_current_summary(current))
-
-    footer_text = context_text or (
-        f"Triggered by <https://github.com/tokyo3am/jkkwatcher|jkkwatcher>"
-        f" · <{UR_SEARCH_URL}|UR で見る>"
-    )
-    blocks.append(
-        {
-            "type": "context",
-            "elements": [{"type": "mrkdwn", "text": footer_text}],
-        }
-    )
-
-    summary_prefix = "<!channel> " if should_mention else ""
-    summary = (
-        f"{summary_prefix}[UR] 新着 {len(diff.added)}件"
-        f" / 終了 {len(diff.removed)}件 / 現在 {len(current)}件"
-    )
-    return {
-        "username": UR_BOT_USERNAME,
-        "icon_emoji": UR_BOT_ICON_EMOJI,
-        "text": summary,
-        "blocks": blocks,
-    }
-
-
-def _suumo_property_card(prop: SuumoProperty) -> list[dict[str, Any]]:
+def _suumo_card(prop: SuumoProperty) -> list[dict[str, Any]]:
     name_md = f"<{prop.detail_url}|{prop.name}>" if prop.detail_url else prop.name
     section: dict[str, Any] = {
         "type": "section",
@@ -392,122 +149,410 @@ def _suumo_property_card(prop: SuumoProperty) -> list[dict[str, Any]]:
     return [section]
 
 
-def _suumo_truncated_cards(
-    prefix: str, label_emoji: str, label: str, items: list[SuumoProperty]
+# ---------- サマリ行フォーマッタ (ソース別) ----------
+
+
+def _jkk_summary_line(p: Property) -> str:
+    return (
+        f"• *{p.name}* ({p.area}) {p.layout} / {p.floor_area} m² / "
+        f"{p.rent} 円 / {p.units} 戸"
+    )
+
+
+def _ur_summary_line(p: UrProperty) -> str:
+    name_md = f"<{p.detail_url}|{p.name}>" if p.detail_url else p.name
+    return (
+        f"• *{name_md}* ({p.area}) {p.room_no} / {p.layout} / "
+        f"{p.floor_area} / {p.rent}"
+    )
+
+
+def _suumo_summary_line(p: SuumoProperty) -> str:
+    name_md = f"<{p.detail_url}|{p.name}>" if p.detail_url else p.name
+    return (
+        f"• *{name_md}* ({p.area}) {p.floor} / {p.layout} / "
+        f"{p.floor_area} / {p.rent}"
+    )
+
+
+# ---------- Renderer (ソース別の見た目を束ねる) ----------
+
+
+@dataclass(frozen=True)
+class SourceRenderer:
+    source: Source
+    label: str               # "[JKK]" 等の prefix
+    bot_username: str
+    bot_icon_emoji: str
+    footer_text: str
+    removed_label: str       # "件の物件が申し込まれました" 等
+    card_formatter: Callable[[Any], list[dict[str, Any]]]
+    summary_line_formatter: Callable[[Any], str]
+
+
+JKK_RENDERER = SourceRenderer(
+    source="jkk",
+    label="[JKK]",
+    bot_username=JKK_BOT_USERNAME,
+    bot_icon_emoji=JKK_BOT_ICON_EMOJI,
+    footer_text=(
+        "Triggered by <https://github.com/tokyo3am/jkkwatcher|jkkwatcher>"
+        f" · <{INIT_URL}|JKK で見る>"
+    ),
+    removed_label="件の物件が申し込まれました",
+    card_formatter=_jkk_card,
+    summary_line_formatter=_jkk_summary_line,
+)
+
+UR_RENDERER = SourceRenderer(
+    source="ur",
+    label="[UR]",
+    bot_username=UR_BOT_USERNAME,
+    bot_icon_emoji=UR_BOT_ICON_EMOJI,
+    footer_text=(
+        "Triggered by <https://github.com/tokyo3am/jkkwatcher|jkkwatcher>"
+        f" · <{UR_SEARCH_URL}|UR で見る>"
+    ),
+    removed_label="件の物件が申し込まれました",
+    card_formatter=_ur_card,
+    summary_line_formatter=_ur_summary_line,
+)
+
+SUUMO_RENDERER = SourceRenderer(
+    source="suumo",
+    label="[Suumo]",
+    bot_username=SUUMO_BOT_USERNAME,
+    bot_icon_emoji=SUUMO_BOT_ICON_EMOJI,
+    footer_text=(
+        "Triggered by <https://github.com/tokyo3am/jkkwatcher|jkkwatcher>"
+        f" · <{SUUMO_SEARCH_URL}|Suumo で見る>"
+    ),
+    removed_label="件の物件が掲載終了しました",
+    card_formatter=_suumo_card,
+    summary_line_formatter=_suumo_summary_line,
+)
+
+
+# ---------- メッセージ組み立てヘルパー ----------
+
+
+def _make_message(
+    renderer: SourceRenderer, *, text: str, blocks: list[dict[str, Any]]
+) -> dict[str, Any]:
+    return {
+        "username": renderer.bot_username,
+        "icon_emoji": renderer.bot_icon_emoji,
+        "text": text,
+        "blocks": blocks,
+    }
+
+
+def _split_added(
+    added: list[P], cfg: NotifyConfig, source: Source
+) -> tuple[list[P], list[P]]:
+    hits: list[P] = []
+    others: list[P] = []
+    for p in added:
+        (hits if cfg.is_hit(source, p) else others).append(p)
+    return hits, others
+
+
+def _render_cards_section(
+    label: str,
+    emoji: str,
+    label_text: str,
+    items: list[P],
+    card_formatter: Callable[[P], list[dict[str, Any]]],
+    *,
+    max_cards: int,
 ) -> list[dict[str, Any]]:
+    """1 セクション分の cards を描画。max_cards 件まで表示。"""
     if not items:
         return []
     blocks: list[dict[str, Any]] = [
-        _header(prefix, label_emoji, f"{len(items)} {label}"),
-        {"type": "divider"},
+        _header(label, emoji, f"{len(items)} {label_text}"),
+        _divider(),
     ]
-    for prop in items[:MAX_DETAIL_CARDS]:
-        blocks.extend(_suumo_property_card(prop))
-        blocks.append({"type": "divider"})
-    if len(items) > MAX_DETAIL_CARDS:
+    show = max(0, min(max_cards, len(items)))
+    for prop in items[:show]:
+        blocks.extend(card_formatter(prop))
+        blocks.append(_divider())
+    if len(items) > show:
         blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"_他 {len(items) - MAX_DETAIL_CARDS} 件は省略_",
+                    "text": f"_他 {len(items) - show} 件は省略_",
                 },
             }
         )
     return blocks
 
 
-def _suumo_current_summary(current: list[SuumoProperty]) -> list[dict[str, Any]]:
-    header = _header("[Suumo]", ":clipboard:", f"現在の空室状況 {len(current)} 件")
-    if not current:
-        return [
-            header,
+def _blocks_for_cards_section(n_show: int, n_total: int) -> int:
+    """_render_cards_section が生成するブロック数を見積もる。"""
+    if n_total == 0:
+        return 0
+    show = max(0, min(n_show, n_total))
+    b = 2 + 2 * show  # header + divider + (card + divider) * show
+    if n_total > show:
+        b += 1  # truncated note
+    return b
+
+
+def _trim_diff_cards(
+    n_others: int, n_removed: int, budget: int
+) -> tuple[int, int]:
+    """budget 内に収まるよう (others_show, removed_show) を決める。
+
+    removed → others の順に削る (ユーザー要件: 「先に削除物件、次に新着物件を削る」)。
+    """
+    others_show = min(n_others, MAX_DETAIL_CARDS)
+    removed_show = min(n_removed, MAX_DETAIL_CARDS)
+    while (
+        _blocks_for_cards_section(others_show, n_others)
+        + _blocks_for_cards_section(removed_show, n_removed)
+    ) > budget:
+        if removed_show > 0:
+            removed_show -= 1
+        elif others_show > 0:
+            others_show -= 1
+        else:
+            break
+    return others_show, removed_show
+
+
+# ---------- 3 メッセージビルダー ----------
+
+
+def _build_hits_message(
+    hits: list[P], renderer: SourceRenderer, *, mention: bool
+) -> dict[str, Any] | None:
+    if not hits:
+        return None
+    blocks: list[dict[str, Any]] = []
+    if mention:
+        blocks.append(
+            _mention_banner(f"ウォッチリストに空きが出ました ({len(hits)} 件)")
+        )
+    blocks.extend(
+        _render_cards_section(
+            renderer.label,
+            ":bell:",
+            "件のウォッチ一致物件があります",
+            hits,
+            renderer.card_formatter,
+            max_cards=MAX_DETAIL_CARDS,
+        )
+    )
+    blocks.append(_context_footer(renderer.footer_text))
+
+    prefix = "<!channel> " if mention else ""
+    text = f"{prefix}{renderer.label} ウォッチ一致 {len(hits)} 件"
+    return _make_message(renderer, text=text, blocks=blocks)
+
+
+def _build_diff_message(
+    others: list[P],
+    removed: list[P],
+    renderer: SourceRenderer,
+    *,
+    mention: bool,
+    total_added: int,
+) -> dict[str, Any] | None:
+    if not others and not removed:
+        return None
+
+    blocks: list[dict[str, Any]] = []
+    if mention:
+        blocks.append(_mention_banner(f"新着 {total_added} 件"))
+
+    overhead = (1 if mention else 0) + 1  # banner + context footer
+    card_budget = BLOCKS_SAFE_LIMIT - overhead
+
+    others_show, removed_show = _trim_diff_cards(len(others), len(removed), card_budget)
+
+    blocks.extend(
+        _render_cards_section(
+            renderer.label,
+            ":white_check_mark:",
+            "件の新着物件があります",
+            others,
+            renderer.card_formatter,
+            max_cards=others_show,
+        )
+    )
+    blocks.extend(
+        _render_cards_section(
+            renderer.label,
+            ":x:",
+            renderer.removed_label,
+            removed,
+            renderer.card_formatter,
+            max_cards=removed_show,
+        )
+    )
+    blocks.append(_context_footer(renderer.footer_text))
+
+    prefix = "<!channel> " if mention else ""
+    text = f"{prefix}{renderer.label} 新着 {len(others)}件 / 終了 {len(removed)}件"
+    return _make_message(renderer, text=text, blocks=blocks)
+
+
+def _pack_lines_into_sections(lines: list[str]) -> list[dict[str, Any]]:
+    """各行を 3000 char 上限の section block にまとめる (詰めるだけ詰める)。"""
+    sections: list[dict[str, Any]] = []
+    cur_lines: list[str] = []
+    cur_size = 0
+    for line in lines:
+        addition = len(line) + (1 if cur_lines else 0)
+        if cur_lines and cur_size + addition > SECTION_TEXT_SAFE_LIMIT:
+            sections.append(
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "\n".join(cur_lines)},
+                }
+            )
+            cur_lines = [line]
+            cur_size = len(line)
+        else:
+            cur_lines.append(line)
+            cur_size += addition
+    if cur_lines:
+        sections.append(
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": "_該当物件なし_"},
-            },
+                "text": {"type": "mrkdwn", "text": "\n".join(cur_lines)},
+            }
+        )
+    return sections
+
+
+def _build_summary_messages(
+    current: list[P], renderer: SourceRenderer
+) -> list[dict[str, Any]]:
+    """現在の空室状況を 1 通以上のメッセージに分割。常に最低 1 通返す。"""
+    if not current:
+        blocks = [
+            _header(renderer.label, ":clipboard:", "現在の空室状況 0 件"),
+            {"type": "section", "text": {"type": "mrkdwn", "text": "_該当物件なし_"}},
+            _context_footer(renderer.footer_text),
+        ]
+        return [
+            _make_message(
+                renderer,
+                text=f"{renderer.label} 現在の空室状況 0 件",
+                blocks=blocks,
+            )
         ]
 
-    lines = []
-    for p in current[:MAX_CURRENT_ROWS]:
-        name_md = f"<{p.detail_url}|{p.name}>" if p.detail_url else p.name
-        lines.append(
-            f"• *{name_md}* ({p.area}) {p.floor} / {p.layout} / "
-            f"{p.floor_area} / {p.rent}"
+    lines = [renderer.summary_line_formatter(p) for p in current]
+    sections = _pack_lines_into_sections(lines)
+
+    # 1 メッセージあたり: header (1) + sections (N) + context (1) <= BLOCKS_SAFE_LIMIT
+    sections_per_message = max(1, BLOCKS_SAFE_LIMIT - 2)
+    n_messages = (len(sections) + sections_per_message - 1) // sections_per_message
+
+    messages: list[dict[str, Any]] = []
+    for i in range(n_messages):
+        chunk = sections[i * sections_per_message : (i + 1) * sections_per_message]
+        suffix = f" ({i + 1}/{n_messages})" if n_messages > 1 else ""
+        header_text = f"現在の空室状況 {len(current)} 件{suffix}"
+        blocks = (
+            [_header(renderer.label, ":clipboard:", header_text)]
+            + chunk
+            + [_context_footer(renderer.footer_text)]
         )
-    if len(current) > MAX_CURRENT_ROWS:
-        lines.append(f"_…他 {len(current) - MAX_CURRENT_ROWS} 件_")
-    return [
-        header,
-        {"type": "section", "text": {"type": "mrkdwn", "text": _join_lines_within_limit(lines)}},
-    ]
+        messages.append(
+            _make_message(
+                renderer,
+                text=f"{renderer.label} {header_text}",
+                blocks=blocks,
+            )
+        )
+    return messages
 
 
-def build_suumo_payload(
+# ---------- 公開 API ----------
+
+
+def build_messages(
+    diff: Diff[P],
+    current: list[P],
+    renderer: SourceRenderer,
+    *,
+    notify_config: NotifyConfig | None = None,
+) -> list[dict[str, Any]]:
+    """3 種類のメッセージ (hits / diff / summary) を順に組んで返す。"""
+    cfg = notify_config or NotifyConfig()
+    hits, others = _split_added(diff.added, cfg, renderer.source)
+
+    # メンションは hits メッセージ優先。hits 無し時のみ diff メッセージへ。
+    mention_in_hits = bool(hits) and cfg.mention_on_watch_hit
+    mention_in_diff = (
+        not mention_in_hits and len(diff.added) > 0 and cfg.mention_on_added
+    )
+
+    messages: list[dict[str, Any]] = []
+    msg_hits = _build_hits_message(hits, renderer, mention=mention_in_hits)
+    if msg_hits is not None:
+        messages.append(msg_hits)
+
+    msg_diff = _build_diff_message(
+        others, diff.removed, renderer,
+        mention=mention_in_diff, total_added=len(diff.added),
+    )
+    if msg_diff is not None:
+        messages.append(msg_diff)
+
+    messages.extend(_build_summary_messages(current, renderer))
+    return messages
+
+
+def build_jkk_messages(
+    diff: Diff[Property],
+    current: list[Property],
+    *,
+    notify_config: NotifyConfig | None = None,
+) -> list[dict[str, Any]]:
+    return build_messages(diff, current, JKK_RENDERER, notify_config=notify_config)
+
+
+def build_ur_messages(
+    diff: Diff[UrProperty],
+    current: list[UrProperty],
+    *,
+    notify_config: NotifyConfig | None = None,
+) -> list[dict[str, Any]]:
+    return build_messages(diff, current, UR_RENDERER, notify_config=notify_config)
+
+
+def build_suumo_messages(
     diff: Diff[SuumoProperty],
     current: list[SuumoProperty],
     *,
-    context_text: str | None = None,
     notify_config: NotifyConfig | None = None,
-) -> dict[str, Any]:
-    cfg = notify_config or NotifyConfig()
-    hits, others = _split_added(diff.added, cfg, "suumo")
-    should_mention, reason = _mention_decision(cfg, len(diff.added), len(hits))
+) -> list[dict[str, Any]]:
+    return build_messages(diff, current, SUUMO_RENDERER, notify_config=notify_config)
 
-    blocks: list[dict[str, Any]] = []
-    if should_mention and reason:
-        blocks.append(_mention_banner(reason))
-    if hits:
-        blocks.extend(
-            _suumo_truncated_cards(
-                "[Suumo]", ":bell:", "件のウォッチ一致物件があります", hits
+
+def notify_all(
+    webhook_url: str,
+    payloads: list[dict[str, Any]],
+    *,
+    timeout: float = 10.0,
+) -> None:
+    """ペイロードを順に POST。途中でエラーが出たら raise (以降は送られない)。"""
+    for i, payload in enumerate(payloads):
+        resp = httpx.post(
+            webhook_url,
+            json=payload,
+            timeout=timeout,
+            headers={"Content-Type": "application/json"},
+        )
+        if resp.status_code != 200 or resp.text.strip() != "ok":
+            raise RuntimeError(
+                f"Slack webhook POST failed (message {i + 1}/{len(payloads)}): "
+                f"status={resp.status_code} body={resp.text!r}"
             )
-        )
-    if others:
-        blocks.extend(
-            _suumo_truncated_cards(
-                "[Suumo]", ":white_check_mark:", "件の新着物件があります", others
-            )
-        )
-    blocks.extend(
-        _suumo_truncated_cards(
-            "[Suumo]", ":x:", "件の物件が掲載終了しました", diff.removed
-        )
-    )
-    blocks.extend(_suumo_current_summary(current))
-
-    footer_text = context_text or (
-        f"Triggered by <https://github.com/tokyo3am/jkkwatcher|jkkwatcher>"
-        f" · <{SUUMO_SEARCH_URL}|Suumo で見る>"
-    )
-    blocks.append(
-        {
-            "type": "context",
-            "elements": [{"type": "mrkdwn", "text": footer_text}],
-        }
-    )
-
-    summary_prefix = "<!channel> " if should_mention else ""
-    summary = (
-        f"{summary_prefix}[Suumo] 新着 {len(diff.added)}件"
-        f" / 終了 {len(diff.removed)}件 / 現在 {len(current)}件"
-    )
-    return {
-        "username": SUUMO_BOT_USERNAME,
-        "icon_emoji": SUUMO_BOT_ICON_EMOJI,
-        "text": summary,
-        "blocks": blocks,
-    }
-
-
-def notify(webhook_url: str, payload: dict[str, Any], *, timeout: float = 10.0) -> None:
-    resp = httpx.post(
-        webhook_url,
-        json=payload,
-        timeout=timeout,
-        headers={"Content-Type": "application/json"},
-    )
-    if resp.status_code != 200 or resp.text.strip() != "ok":
-        raise RuntimeError(
-            f"Slack webhook POST failed: status={resp.status_code} body={resp.text!r}"
-        )

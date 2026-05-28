@@ -3,7 +3,11 @@ from __future__ import annotations
 
 from jkkwatcher.diff import Diff
 from jkkwatcher.models import Property, SuumoProperty, UrProperty
-from jkkwatcher.notifier import build_payload, build_suumo_payload, build_ur_payload
+from jkkwatcher.notifier import (
+    build_jkk_messages,
+    build_suumo_messages,
+    build_ur_messages,
+)
 from jkkwatcher.watchlist import NotifyConfig, WatchlistEntry
 
 
@@ -15,149 +19,125 @@ def make_jkk(residence_code: str, room_id: str, name: str) -> Property:
     )
 
 
-def first_block_text(payload: dict) -> str:
-    block = payload["blocks"][0]
-    t = block.get("text", {})
-    if isinstance(t, dict):
-        return t.get("text", "")
-    return str(t)
+def summarize_messages(label: str, messages: list[dict]) -> None:
+    print(f"\n=== {label} ({len(messages)} messages) ===")
+    for i, m in enumerate(messages):
+        blocks = m["blocks"]
+        text = m["text"]
+        max_section = 0
+        for b in blocks:
+            t = b.get("text", {})
+            if isinstance(t, dict):
+                max_section = max(max_section, len(t.get("text", "")))
+        print(
+            f"  msg[{i}] blocks={len(blocks):2d} max_section_text={max_section:4d} text={text!r}"
+        )
 
 
-def scenario(name: str, payload: dict) -> None:
-    print(f"--- {name}")
-    print(f"  text   : {payload['text']!r}")
-    print(f"  block0 : {first_block_text(payload)!r}")
-    print(f"  blocks : {len(payload['blocks'])}")
+# ---------- 基本シナリオ (hits + others + removed) ----------
 
-
-# JKK 物件: WATCH 一致 1 件 + OTHER 1 件
 p_hit = make_jkk("WATCH", "001", "ウォッチ対象")
-p_other = make_jkk("OTHER", "002", "その他物件")
-diff = Diff(added=[p_hit, p_other], removed=[])
+p_other1 = make_jkk("OTHER1", "002", "その他物件1")
+p_other2 = make_jkk("OTHER2", "003", "その他物件2")
+p_removed = make_jkk("REM1", "004", "終了物件")
 
-# A. config なし (デフォルト動作: mention_on_watch_hit=True だが watchlist 空)
-scenario("A. no config (default)", build_payload(diff, [p_hit, p_other]))
+diff = Diff(added=[p_hit, p_other1, p_other2], removed=[p_removed])
+current = [p_hit, p_other1, p_other2]
 
-# B. ウォッチリスト一致あり (watch_hit=True)
+cfg_default = NotifyConfig()
+summarize_messages("A. default cfg", build_jkk_messages(diff, current, notify_config=cfg_default))
+
 cfg_hit = NotifyConfig(
     mention_on_watch_hit=True,
     watchlist=(WatchlistEntry(source="jkk", building_key="WATCH"),),
 )
-scenario("B. watchlist hit", build_payload(diff, [p_hit, p_other], notify_config=cfg_hit))
+summarize_messages("B. watchlist hit", build_jkk_messages(diff, current, notify_config=cfg_hit))
 
-# C. 全件メンション (on_added=True, watch=False)
 cfg_added = NotifyConfig(mention_on_added=True, mention_on_watch_hit=False)
-scenario("C. on_added", build_payload(diff, [p_hit, p_other], notify_config=cfg_added))
+summarize_messages("C. on_added only", build_jkk_messages(diff, current, notify_config=cfg_added))
 
-# D. 両方 true: hit が優先される
 cfg_both = NotifyConfig(
     mention_on_added=True,
     mention_on_watch_hit=True,
     watchlist=(WatchlistEntry(source="jkk", building_key="WATCH"),),
 )
-scenario("D. both true (hit priority)", build_payload(diff, [p_hit, p_other], notify_config=cfg_both))
+summarize_messages("D. both true (hit priority)", build_jkk_messages(diff, current, notify_config=cfg_both))
 
-# E. added 0 件 (removed のみ): メンション無し
-diff_no_add = Diff(added=[], removed=[p_hit])
-scenario("E. removed only", build_payload(diff_no_add, [p_other], notify_config=cfg_added))
+# E. added 無し → hits/diff メッセージは無く、current_summary だけ
+diff_no_add = Diff(added=[], removed=[p_removed])
+summarize_messages("E. removed only", build_jkk_messages(diff_no_add, [p_other1], notify_config=cfg_added))
 
-# F. UR と Suumo も同様に動作することを確認
-ur_p = UrProperty(
-    name="UR対象", area="中央区", address="", access="", layout="1LDK",
-    floor_area="40", floor="3", rent="120000", common_fee="2000",
-    shisya="30", danchi="503", shikibetu="2", room_id="r",
-    room_no="101", detail_url="https://example.com",
-)
-cfg_ur = NotifyConfig(
-    mention_on_watch_hit=True,
-    watchlist=(WatchlistEntry(source="ur", building_key="30_503_2"),),
-)
-scenario("F. UR hit", build_ur_payload(Diff(added=[ur_p], removed=[]), [ur_p], notify_config=cfg_ur))
+# ---------- current_summary 大量 → 複数 section ----------
 
-suumo_p = SuumoProperty(
-    name="Suumo対象", area="中央区", address="", access="", age="築10年",
-    building_floors="", floor="3階", layout="1LDK", floor_area="40m²",
-    rent="13万円", common_fee="", jnc="J1", bc="B123",
-    detail_url="https://example.com",
-)
-cfg_suumo = NotifyConfig(
-    mention_on_watch_hit=True,
-    watchlist=(WatchlistEntry(source="suumo", building_key="B123"),),
-)
-scenario(
-    "G. Suumo hit",
-    build_suumo_payload(Diff(added=[suumo_p], removed=[]), [suumo_p], notify_config=cfg_suumo),
-)
-
-# H. name_contains: 物件名 "コーシャハイム世田谷" の部分一致
-p_name_hit = make_jkk("ANY1", "010", "コーシャハイム世田谷ⅡA")
-p_name_other = make_jkk("ANY2", "011", "都営アパート")
-cfg_name = NotifyConfig(
-    mention_on_watch_hit=True,
-    watchlist=(WatchlistEntry(source="jkk", name_contains="コーシャハイム"),),
-)
-scenario(
-    "H. name_contains hit",
-    build_payload(
-        Diff(added=[p_name_hit, p_name_other], removed=[]),
-        [p_name_hit, p_name_other],
-        notify_config=cfg_name,
-    ),
-)
-
-# I. name_contains 大文字小文字無視
-p_ur_case = UrProperty(
-    name="UR Shibuya Tower", area="渋谷区", address="", access="", layout="1LDK",
-    floor_area="40", floor="3", rent="120000", common_fee="2000",
-    shisya="30", danchi="503", shikibetu="2", room_id="r",
-    room_no="101", detail_url="https://example.com",
-)
-cfg_case = NotifyConfig(
-    mention_on_watch_hit=True,
-    watchlist=(WatchlistEntry(source="ur", name_contains="shibuya"),),
-)
-scenario(
-    "I. name_contains case-insensitive",
-    build_ur_payload(Diff(added=[p_ur_case], removed=[]), [p_ur_case], notify_config=cfg_case),
-)
-
-# J. building_key + name_contains の併用 (別エントリで OR)
-cfg_mix = NotifyConfig(
-    mention_on_watch_hit=True,
-    watchlist=(
-        WatchlistEntry(source="jkk", building_key="WATCH"),
-        WatchlistEntry(source="jkk", name_contains="コーシャ"),
-    ),
-)
-diff_mix = Diff(added=[p_hit, p_name_hit, p_other], removed=[])
-scenario(
-    "J. mixed entries (OR)",
-    build_payload(diff_mix, [p_hit, p_name_hit, p_other], notify_config=cfg_mix),
-)
-
-# K. 不正設定: 1 エントリに両方指定するとエラー
-print("--- K. invalid: both fields in one entry")
-try:
-    WatchlistEntry(source="jkk", building_key="X", name_contains="Y")
-    print("  ERROR: expected ValueError")
-except ValueError as e:
-    print(f"  OK raised: {e}")
-
-# L. 不正設定: from_json でも検出される
-print("--- L. invalid via from_json")
-try:
-    NotifyConfig.from_json(
-        '{"watchlist":[{"source":"jkk","building_key":"x","name_contains":"y"}]}'
+# UR: 大量物件で複数 section に分割される想定
+ur_lots = [
+    UrProperty(
+        name=f"UR物件名{i:03d}メッシュリッチプラザザタワー",  # 名前長め
+        area="中央区", address="長めの住所" * 3, access="アクセス情報" * 2,
+        layout="2LDK", floor_area="60m²", floor=f"{i % 30 + 1}",
+        rent="200,000円", common_fee="5,000円",
+        shisya="30", danchi="503", shikibetu=f"{i:03d}", room_id=f"r{i}",
+        room_no=f"{i:03d}",
+        detail_url=f"https://www.ur-net.go.jp/chintai/detail/30_503_{i:03d}.html",
     )
-    print("  ERROR: expected ValueError")
-except ValueError as e:
-    print(f"  OK raised: {e}")
-
-# M. from_json で name_contains を読み込み
-print("--- M. from_json with name_contains")
-cfg_loaded = NotifyConfig.from_json(
-    '{"watchlist":[{"source":"jkk","name_contains":"コーシャハイム"}]}'
+    for i in range(80)
+]
+ur_diff = Diff(added=ur_lots[:3], removed=[])
+summarize_messages(
+    "F. UR 80 件 current_summary",
+    build_ur_messages(ur_diff, ur_lots, notify_config=cfg_default),
 )
-print(f"  watchlist[0]: {cfg_loaded.watchlist[0]}")
-print(f"  is_hit (hit): {cfg_loaded.is_hit('jkk', p_name_hit)}")
-print(f"  is_hit (miss): {cfg_loaded.is_hit('jkk', p_name_other)}")
+
+# ---------- Suumo: 24件 added + 5件 removed ----------
+
+suumo_props = [
+    SuumoProperty(
+        name=f"Suumo物件{i}", area="中央区", address="", access="アクセス情報",
+        age="築10年", building_floors="", floor=f"{i + 1}階",
+        layout="1LDK", floor_area="40m²", rent="13万円", common_fee="-",
+        jnc=f"jnc{i}", bc=f"bc{i}",
+        detail_url=f"https://suumo.jp/chintai/jnc_{i:09d}/?bc=100{i:09d}",
+    )
+    for i in range(43)
+]
+suumo_diff = Diff(added=suumo_props[:24], removed=suumo_props[24:29])
+summarize_messages(
+    "G. Suumo 24 added / 5 removed / 43 current",
+    build_suumo_messages(suumo_diff, suumo_props, notify_config=cfg_default),
+)
+
+# ---------- 上限近傍テスト: 多数の added/removed で trim 確認 ----------
+
+many_added = [make_jkk(f"A{i}", f"r{i}", f"新着{i}") for i in range(40)]
+many_removed = [make_jkk(f"R{i}", f"r{i}", f"終了{i}") for i in range(40)]
+diff_many = Diff(added=many_added, removed=many_removed)
+current_small = many_added[:5]
+summarize_messages(
+    "H. 40 added / 40 removed (trim test)",
+    build_jkk_messages(diff_many, current_small, notify_config=cfg_default),
+)
+
+# ---------- Validate: 全 message が Slack 制約内 ----------
+
+def validate(label: str, messages: list[dict]) -> None:
+    for i, m in enumerate(messages):
+        blocks = m["blocks"]
+        if len(blocks) > 50:
+            print(f"  FAIL: {label} msg[{i}] has {len(blocks)} blocks (> 50)")
+            return
+        for j, b in enumerate(blocks):
+            t = b.get("text", {})
+            if isinstance(t, dict):
+                tlen = len(t.get("text", ""))
+                if tlen > 3000:
+                    print(f"  FAIL: {label} msg[{i}] block[{j}] text {tlen} chars (> 3000)")
+                    return
+    print(f"  OK: {label} all messages within Slack limits")
+
+
+print("\n=== Slack 制約バリデーション ===")
+validate("A", build_jkk_messages(diff, current, notify_config=cfg_default))
+validate("B", build_jkk_messages(diff, current, notify_config=cfg_hit))
+validate("F", build_ur_messages(ur_diff, ur_lots, notify_config=cfg_default))
+validate("G", build_suumo_messages(suumo_diff, suumo_props, notify_config=cfg_default))
+validate("H", build_jkk_messages(diff_many, current_small, notify_config=cfg_default))

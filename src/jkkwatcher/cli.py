@@ -153,9 +153,9 @@ def jkk_watch(
             diff_mod.save_state(state, current)
         return
 
-    payload = notifier.build_payload(delta, current, notify_config=notify_config)
+    payloads = notifier.build_jkk_messages(delta, current, notify_config=notify_config)
     if dry_run:
-        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        typer.echo(json.dumps(payloads, ensure_ascii=False, indent=2))
         return
 
     if not webhook:
@@ -165,8 +165,8 @@ def jkk_watch(
         )
         raise typer.Exit(code=2)
 
-    notifier.notify(webhook, payload)
-    console.print("[green]Slack に通知しました。")
+    notifier.notify_all(webhook, payloads)
+    console.print(f"[green]Slack に通知しました ({len(payloads)} メッセージ)。")
     diff_mod.save_state(state, current)
 
 
@@ -311,9 +311,9 @@ def ur_watch(
             diff_mod.save_state(state, current)
         return
 
-    payload = notifier.build_ur_payload(delta, current, notify_config=notify_config)
+    payloads = notifier.build_ur_messages(delta, current, notify_config=notify_config)
     if dry_run:
-        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        typer.echo(json.dumps(payloads, ensure_ascii=False, indent=2))
         return
 
     if not webhook:
@@ -323,8 +323,8 @@ def ur_watch(
         )
         raise typer.Exit(code=2)
 
-    notifier.notify(webhook, payload)
-    console.print("[green]Slack に通知しました。")
+    notifier.notify_all(webhook, payloads)
+    console.print(f"[green]Slack に通知しました ({len(payloads)} メッセージ)。")
     diff_mod.save_state(state, current)
 
 
@@ -456,9 +456,9 @@ def suumo_watch(
             diff_mod.save_state(state, current)
         return
 
-    payload = notifier.build_suumo_payload(delta, current, notify_config=notify_config)
+    payloads = notifier.build_suumo_messages(delta, current, notify_config=notify_config)
     if dry_run:
-        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        typer.echo(json.dumps(payloads, ensure_ascii=False, indent=2))
         return
 
     if not webhook:
@@ -468,8 +468,8 @@ def suumo_watch(
         )
         raise typer.Exit(code=2)
 
-    notifier.notify(webhook, payload)
-    console.print("[green]Slack に通知しました。")
+    notifier.notify_all(webhook, payloads)
+    console.print(f"[green]Slack に通知しました ({len(payloads)} メッセージ)。")
     diff_mod.save_state(state, current)
 
 
