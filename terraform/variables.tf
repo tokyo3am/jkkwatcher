@@ -40,9 +40,15 @@ variable "github_pat_secret_id" {
 }
 
 variable "schedule" {
-  description = "Cron schedule for triggering the workflow"
+  description = "Cron schedule for triggering JKK+UR watchers"
   type        = string
   default     = "*/5 * * * *"
+}
+
+variable "schedule_suumo" {
+  description = "Cron schedule for triggering the Suumo watcher (lower frequency to avoid load)"
+  type        = string
+  default     = "0 * * * *"
 }
 
 variable "time_zone" {

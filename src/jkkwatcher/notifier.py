@@ -5,8 +5,9 @@ from typing import Any
 import httpx
 
 from .diff import Diff
-from .models import Property, UrProperty
+from .models import Property, SuumoProperty, UrProperty
 from .scraper import INIT_URL
+from .suumo_scraper import DEFAULT_SEARCH_URL as SUUMO_SEARCH_URL
 
 # Slack のメッセージは最大 50 ブロック。物件カードが詰めても収まるよう、
 # 差分カードと現状リストの上限をそれぞれ別途絞る。
@@ -31,6 +32,8 @@ JKK_BOT_USERNAME = "JKK Watcher"
 JKK_BOT_ICON_EMOJI = ":classical_building:"  # 🏛️
 UR_BOT_USERNAME = "UR Watcher"
 UR_BOT_ICON_EMOJI = ":office:"  # 🏢
+SUUMO_BOT_USERNAME = "Suumo Watcher"
+SUUMO_BOT_ICON_EMOJI = ":house:"  # 🏠
 
 
 def _header(prefix: str, emoji: str, text: str) -> dict[str, Any]:
@@ -271,6 +274,123 @@ def build_ur_payload(
     return {
         "username": UR_BOT_USERNAME,
         "icon_emoji": UR_BOT_ICON_EMOJI,
+        "text": summary,
+        "blocks": blocks,
+    }
+
+
+def _suumo_property_card(prop: SuumoProperty) -> list[dict[str, Any]]:
+    name_md = f"<{prop.detail_url}|{prop.name}>" if prop.detail_url else prop.name
+    section: dict[str, Any] = {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": f"*{name_md}*\n{prop.area}・{prop.age}・{prop.access}",
+        },
+        "fields": [
+            {"type": "mrkdwn", "text": f"*間取り*\n{prop.layout}"},
+            {"type": "mrkdwn", "text": f"*階*\n{prop.floor}"},
+            {"type": "mrkdwn", "text": f"*床面積*\n{prop.floor_area}"},
+            {"type": "mrkdwn", "text": f"*家賃*\n{prop.rent}"},
+        ],
+    }
+    if prop.thumbnail_url:
+        section["accessory"] = {
+            "type": "image",
+            "image_url": prop.thumbnail_url,
+            "alt_text": prop.name,
+        }
+    return [section]
+
+
+def _suumo_truncated_cards(
+    prefix: str, label_emoji: str, label: str, items: list[SuumoProperty]
+) -> list[dict[str, Any]]:
+    if not items:
+        return []
+    blocks: list[dict[str, Any]] = [
+        _header(prefix, label_emoji, f"{len(items)} {label}"),
+        {"type": "divider"},
+    ]
+    for prop in items[:MAX_DETAIL_CARDS]:
+        blocks.extend(_suumo_property_card(prop))
+        blocks.append({"type": "divider"})
+    if len(items) > MAX_DETAIL_CARDS:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"_他 {len(items) - MAX_DETAIL_CARDS} 件は省略_",
+                },
+            }
+        )
+    return blocks
+
+
+def _suumo_current_summary(current: list[SuumoProperty]) -> list[dict[str, Any]]:
+    header = _header("[Suumo]", ":clipboard:", f"現在の空室状況 {len(current)} 件")
+    if not current:
+        return [
+            header,
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "_該当物件なし_"},
+            },
+        ]
+
+    lines = []
+    for p in current[:MAX_CURRENT_ROWS]:
+        name_md = f"<{p.detail_url}|{p.name}>" if p.detail_url else p.name
+        lines.append(
+            f"• *{name_md}* ({p.area}) {p.floor} / {p.layout} / "
+            f"{p.floor_area} / {p.rent}"
+        )
+    if len(current) > MAX_CURRENT_ROWS:
+        lines.append(f"_…他 {len(current) - MAX_CURRENT_ROWS} 件_")
+    return [
+        header,
+        {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}},
+    ]
+
+
+def build_suumo_payload(
+    diff: Diff[SuumoProperty],
+    current: list[SuumoProperty],
+    *,
+    context_text: str | None = None,
+) -> dict[str, Any]:
+    blocks: list[dict[str, Any]] = []
+    blocks.extend(
+        _suumo_truncated_cards(
+            "[Suumo]", ":white_check_mark:", "件の新着物件があります", diff.added
+        )
+    )
+    blocks.extend(
+        _suumo_truncated_cards(
+            "[Suumo]", ":x:", "件の物件が掲載終了しました", diff.removed
+        )
+    )
+    blocks.extend(_suumo_current_summary(current))
+
+    footer_text = context_text or (
+        f"Triggered by <https://github.com/tokyo3am/jkkwatcher|jkkwatcher>"
+        f" · <{SUUMO_SEARCH_URL}|Suumo で見る>"
+    )
+    blocks.append(
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": footer_text}],
+        }
+    )
+
+    summary = (
+        f"[Suumo] 新着 {len(diff.added)}件 / 終了 {len(diff.removed)}件"
+        f" / 現在 {len(current)}件"
+    )
+    return {
+        "username": SUUMO_BOT_USERNAME,
+        "icon_emoji": SUUMO_BOT_ICON_EMOJI,
         "text": summary,
         "blocks": blocks,
     }

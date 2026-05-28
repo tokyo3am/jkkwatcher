@@ -11,8 +11,9 @@ from rich.table import Table
 
 from . import diff as diff_mod
 from . import notifier
-from .models import KU_CODES, SKCS_CODES, Area, Property, UrProperty
+from .models import KU_CODES, SKCS_CODES, Area, Property, SuumoProperty, UrProperty
 from .scraper import JkkScraper
+from .suumo_scraper import DEFAULT_SEARCH_URL as SUUMO_DEFAULT_URL, SuumoScraper
 from .ur_scraper import UrScraper
 
 
@@ -36,8 +37,13 @@ ur_app = typer.Typer(
     help="UR (都市再生機構) の空き物件",
     no_args_is_help=True,
 )
+suumo_app = typer.Typer(
+    help="Suumo (民間賃貸) の空き部屋",
+    no_args_is_help=True,
+)
 app.add_typer(jkk_app, name="jkk")
 app.add_typer(ur_app, name="ur")
+app.add_typer(suumo_app, name="suumo")
 
 
 def _validate_ku_codes(values: list[str] | None) -> list[str] | None:
@@ -322,6 +328,124 @@ def ur_diff(
     _render_ur_diff(delta, output, console)
 
 
+# ---------- Suumo ----------
+
+
+@suumo_app.command("search")
+def suumo_search(
+    url: Annotated[
+        str,
+        typer.Option(
+            "--url",
+            help="Suumo 検索 URL。未指定時は組み込みのデフォルト URL を使用。",
+        ),
+    ] = SUUMO_DEFAULT_URL,
+    output: Annotated[
+        OutputFormat, typer.Option("--output", "-o", help="出力形式")
+    ] = OutputFormat.TABLE,
+) -> None:
+    """Suumo の空き部屋を検索して一覧表示する。"""
+    console = Console()
+    with SuumoScraper(search_url=url) as scraper:
+        with console.status("[cyan]Suumo に問い合わせ中..."):
+            properties = scraper.search()
+    _render_suumo(properties, output, console)
+
+
+@suumo_app.command("watch")
+def suumo_watch(
+    state: Annotated[
+        Path,
+        typer.Option("--state", "-s", help="前回結果を保存する JSON ファイル"),
+    ] = Path("state-suumo.json"),
+    webhook: Annotated[
+        str | None,
+        typer.Option(
+            "--webhook",
+            "-w",
+            envvar="SLACK_WEBHOOK_URL",
+            help="Slack Incoming Webhook URL (env: SLACK_WEBHOOK_URL)",
+        ),
+    ] = None,
+    url: Annotated[
+        str,
+        typer.Option(
+            "--url",
+            help="Suumo 検索 URL。未指定時は組み込みのデフォルト URL を使用。",
+        ),
+    ] = SUUMO_DEFAULT_URL,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Slack に投げず state 更新もスキップ。ペイロードを stdout に出すだけ",
+        ),
+    ] = False,
+) -> None:
+    """Suumo の空き部屋を取得し、前回 state との差分があれば Slack に通知する。"""
+    console = Console(stderr=True)
+    with SuumoScraper(search_url=url) as scraper:
+        with console.status("[cyan]Suumo に問い合わせ中..."):
+            current = scraper.search()
+
+    previous = diff_mod.load_suumo_state(state)
+    delta = diff_mod.compute(previous, current)
+    console.print(
+        f"[bold]差分:[/bold] 新着 {len(delta.added)} 件 / "
+        f"終了 {len(delta.removed)} 件 / 現在 {len(current)} 件"
+    )
+
+    if delta.is_empty:
+        console.print("[green]差分なし。通知をスキップしました。")
+        if not dry_run:
+            diff_mod.save_state(state, current)
+        return
+
+    payload = notifier.build_suumo_payload(delta, current)
+    if dry_run:
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+
+    if not webhook:
+        console.print(
+            "[red]差分はあるが Slack webhook 未指定 (--webhook / $SLACK_WEBHOOK_URL)。"
+            "state も保存しません。"
+        )
+        raise typer.Exit(code=2)
+
+    notifier.notify(webhook, payload)
+    console.print("[green]Slack に通知しました。")
+    diff_mod.save_state(state, current)
+
+
+@suumo_app.command("diff")
+def suumo_diff(
+    state: Annotated[
+        Path,
+        typer.Option("--state", "-s", help="比較対象の state JSON ファイル"),
+    ] = Path("state-suumo.json"),
+    url: Annotated[
+        str,
+        typer.Option(
+            "--url",
+            help="Suumo 検索 URL。未指定時は組み込みのデフォルト URL を使用。",
+        ),
+    ] = SUUMO_DEFAULT_URL,
+    output: Annotated[
+        OutputFormat, typer.Option("--output", "-o", help="出力形式")
+    ] = OutputFormat.TABLE,
+) -> None:
+    """state-suumo.json と現在スクレイプ結果の差分だけを出す (state は更新しない)。"""
+    console = Console(stderr=True)
+    with SuumoScraper(search_url=url) as scraper:
+        with console.status("[cyan]Suumo に問い合わせ中..."):
+            current = scraper.search()
+
+    previous = diff_mod.load_suumo_state(state)
+    delta = diff_mod.compute(previous, current)
+    _render_suumo_diff(delta, output, console)
+
+
 # ---------- renderers ----------
 
 
@@ -468,6 +592,84 @@ def _ur_table(
             p.rent,
             p.common_fee,
             p.room_id,
+        )
+    return table
+
+
+def _render_suumo(
+    properties: list[SuumoProperty], output: OutputFormat, console: Console
+) -> None:
+    if output is OutputFormat.JSON:
+        typer.echo(
+            json.dumps([p.to_dict() for p in properties], ensure_ascii=False, indent=2)
+        )
+        return
+    if not properties:
+        console.print("[yellow]該当物件はありません。")
+        return
+    console.print(_suumo_table(properties, title=f"Suumo 空き部屋 {len(properties)} 件"))
+
+
+def _render_suumo_diff(
+    delta: diff_mod.Diff[SuumoProperty], output: OutputFormat, console: Console
+) -> None:
+    if output is OutputFormat.JSON:
+        typer.echo(
+            json.dumps(
+                {
+                    "added": [p.to_dict() for p in delta.added],
+                    "removed": [p.to_dict() for p in delta.removed],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+    if delta.is_empty:
+        console.print("[green]差分なし。")
+        return
+    if delta.added:
+        console.print(
+            _suumo_table(
+                delta.added,
+                title=f"[green]+ 新着 {len(delta.added)} 件",
+                style="green",
+            )
+        )
+    if delta.removed:
+        console.print(
+            _suumo_table(
+                delta.removed,
+                title=f"[red]- 終了 {len(delta.removed)} 件",
+                style="red",
+            )
+        )
+
+
+def _suumo_table(
+    properties: list[SuumoProperty], *, title: str, style: str | None = None
+) -> Table:
+    table = Table(title=title, title_style=style)
+    table.add_column("物件名", style="cyan", no_wrap=False)
+    table.add_column("地域", style="magenta")
+    table.add_column("築年")
+    table.add_column("階", justify="right")
+    table.add_column("間取り")
+    table.add_column("床面積")
+    table.add_column("家賃", justify="right", style="green")
+    table.add_column("管理費", justify="right")
+    table.add_column("ID")
+    for p in properties:
+        table.add_row(
+            p.name,
+            p.area,
+            p.age,
+            p.floor,
+            p.layout,
+            p.floor_area,
+            p.rent,
+            p.common_fee,
+            p.jnc,
         )
     return table
 

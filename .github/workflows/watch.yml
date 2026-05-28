@@ -4,6 +4,13 @@ on:
   # 定期実行は Cloud Scheduler から workflow_dispatch を叩く構成。
   # cron を併用したい場合は schedule トリガーを足す。
   workflow_dispatch:
+    inputs:
+      targets:
+        description: "実行対象 (カンマ区切り: jkk, ur, suumo)"
+        type: string
+        # 既存 Cloud Scheduler が inputs を送らない時の安全なデフォルト。
+        # Suumo は明示指定された時のみ走らせる (Terraform 側で別ジョブから付与)。
+        default: "jkk,ur"
 
 permissions:
   contents: write
@@ -23,7 +30,7 @@ jobs:
         run: |
           if git ls-remote --exit-code --heads origin state >/dev/null 2>&1; then
             git fetch --depth=1 origin state
-            for f in state.json state-ur.json; do
+            for f in state.json state-ur.json state-suumo.json; do
               if git cat-file -e "origin/state:$f" 2>/dev/null; then
                 git show "origin/state:$f" > "$f"
                 echo "Restored $f ($(wc -c < "$f") bytes)"
@@ -43,23 +50,31 @@ jobs:
         run: uv sync --frozen
 
       - name: Run JKK watcher
+        # targets 文字列を境界付きで比較し、'ur' が 'suumo' に部分一致するなどを防ぐ。
+        if: contains(format(',{0},', inputs.targets), ',jkk,')
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: uv run jkkwatcher jkk watch --state state.json
 
       - name: Run UR watcher
-        if: always()
+        if: always() && contains(format(',{0},', inputs.targets), ',ur,')
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: uv run jkkwatcher ur watch --state state-ur.json
 
+      - name: Run Suumo watcher
+        if: always() && contains(format(',{0},', inputs.targets), ',suumo,')
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: uv run jkkwatcher suumo watch --state state-suumo.json
+
       - name: Persist state to `state` branch
-        if: always() && (hashFiles('state.json') != '' || hashFiles('state-ur.json') != '')
+        if: always() && (hashFiles('state.json') != '' || hashFiles('state-ur.json') != '' || hashFiles('state-suumo.json') != '')
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           tmp="$(mktemp -d)"
-          for f in state.json state-ur.json; do
+          for f in state.json state-ur.json state-suumo.json; do
             [ -f "$f" ] && cp "$f" "$tmp/"
           done
           cd "$tmp"

@@ -102,3 +102,32 @@ class UrProperty:
 
     def to_dict(self) -> dict[str, str | None]:
         return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class SuumoProperty:
+    """Suumo の空き部屋。建物 (cassetteitem) + 号室を一行に flatten したもの。"""
+
+    name: str                # マンション名
+    area: str                # 区 (住所から抽出)
+    address: str             # 住所
+    access: str              # 駅情報 (複数行を " / " で join)
+    age: str                 # 築年数 ("築17年")
+    building_floors: str     # 構造/階数 ("地下1地上5階建")
+    floor: str               # 所在階 ("5階")
+    layout: str              # 間取り ("1LDK")
+    floor_area: str          # 専有面積 ("70.13m²")
+    rent: str                # 賃料 ("18.8万円")
+    common_fee: str          # 管理費 ("-" もあり得る)
+    jnc: str                 # 部屋 listing ID (URL の jnc_XXXXXXXXX)
+    bc: str                  # 建物コード (URL の bc=XXXXXXXXX)
+    detail_url: str          # 詳細ページの絶対 URL
+    thumbnail_url: str | None = None
+
+    @property
+    def key(self) -> str:
+        # jnc 単独でも実質一意だが、UR と揃えて建物 + 部屋の複合キーにする。
+        return f"SUUMO:{self.bc}:{self.jnc}"
+
+    def to_dict(self) -> dict[str, str | None]:
+        return asdict(self)

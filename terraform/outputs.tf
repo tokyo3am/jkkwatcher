@@ -1,6 +1,11 @@
 output "scheduler_job_name" {
-  description = "Cloud Scheduler job resource name"
+  description = "Cloud Scheduler job resource name (JKK+UR)"
   value       = google_cloud_scheduler_job.jkkwatcher_trigger.id
+}
+
+output "scheduler_suumo_job_name" {
+  description = "Cloud Scheduler job resource name (Suumo)"
+  value       = google_cloud_scheduler_job.jkkwatcher_suumo_trigger.id
 }
 
 output "workflow_dispatch_url" {

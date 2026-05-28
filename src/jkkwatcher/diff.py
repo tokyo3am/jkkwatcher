@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Generic, TypeVar
 
-from .models import PropertyLike, Property, UrProperty
+from .models import PropertyLike, Property, SuumoProperty, UrProperty
 
 
 P = TypeVar("P", bound=PropertyLike)
@@ -52,3 +52,7 @@ def load_jkk_state(path: Path) -> list[Property]:
 
 def load_ur_state(path: Path) -> list[UrProperty]:
     return load_state(path, UrProperty)
+
+
+def load_suumo_state(path: Path) -> list[SuumoProperty]:
+    return load_state(path, SuumoProperty)
