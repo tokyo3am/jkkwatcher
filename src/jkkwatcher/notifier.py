@@ -16,6 +16,27 @@ P = TypeVar("P", bound=PropertyLike)
 # 差分カードと現状リストの上限をそれぞれ別途絞る。
 MAX_DETAIL_CARDS = 8
 MAX_CURRENT_ROWS = 30
+# Slack の section block 内 mrkdwn text は 3000 文字上限。URL 付きの行を
+# 30 行並べると Suumo は超える (invalid_blocks エラー) ので動的に切り詰める。
+SECTION_TEXT_LIMIT = 3000
+
+
+def _join_lines_within_limit(lines: list[str]) -> str:
+    """3000 char 上限内に収まるよう join し、超える分は末尾に省略文を付ける。"""
+    full = "\n".join(lines)
+    if len(full) <= SECTION_TEXT_LIMIT:
+        return full
+    # 省略文の余裕として 40 chars 確保しつつ詰める。
+    reserve = 40
+    out: list[str] = []
+    size = 0
+    for i, line in enumerate(lines):
+        addition = len(line) + (1 if out else 0)
+        if size + addition + reserve > SECTION_TEXT_LIMIT:
+            return "\n".join(out) + f"\n_…他 {len(lines) - i} 件_"
+        out.append(line)
+        size += addition
+    return "\n".join(out)
 
 # UR 検索結果ページ (フッターからリンクする用)
 UR_SEARCH_URL = (
@@ -203,7 +224,7 @@ def _current_summary(current: list[Property]) -> list[dict[str, Any]]:
         lines.append(f"_…他 {len(current) - MAX_CURRENT_ROWS} 件_")
     return [
         header,
-        {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": _join_lines_within_limit(lines)}},
     ]
 
 
@@ -229,7 +250,7 @@ def _ur_current_summary(current: list[UrProperty]) -> list[dict[str, Any]]:
         lines.append(f"_…他 {len(current) - MAX_CURRENT_ROWS} 件_")
     return [
         header,
-        {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": _join_lines_within_limit(lines)}},
     ]
 
 
@@ -418,7 +439,7 @@ def _suumo_current_summary(current: list[SuumoProperty]) -> list[dict[str, Any]]
         lines.append(f"_…他 {len(current) - MAX_CURRENT_ROWS} 件_")
     return [
         header,
-        {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": _join_lines_within_limit(lines)}},
     ]
 
 
