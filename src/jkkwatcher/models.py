@@ -140,8 +140,14 @@ class SuumoProperty:
 
     @property
     def key(self) -> str:
-        # jnc 単独でも実質一意だが、UR と揃えて建物 + 部屋の複合キーにする。
-        return f"SUUMO:{self.bc}:{self.jnc}"
+        # Suumo は同じ部屋を仲介業者ごとに別 listing (jnc/bc) として並べるため、
+        # listing ID ベースだと検索結果に重複が出るし、業者入れ替わりで
+        # added/removed が振動する。物件フィンガープリント (建物名 + 階 +
+        # 間取り + 面積 + 賃料) で同一視する。
+        return (
+            f"SUUMO:{self.name}|{self.floor}|{self.layout}"
+            f"|{self.floor_area}|{self.rent}"
+        )
 
     @property
     def building_key(self) -> str:
