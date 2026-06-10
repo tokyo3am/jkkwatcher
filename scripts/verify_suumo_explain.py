@@ -10,6 +10,12 @@ import tempfile
 from pathlib import Path
 
 from jkkwatcher.cli import SUUMO_URL_ENVVAR, _resolve_suumo_url
+from jkkwatcher.models import SuumoProperty
+from jkkwatcher.notifier import (
+    _format_suumo_access,
+    _suumo_floors,
+    _suumo_summary_line,
+)
 from jkkwatcher.suumo_explain import (
     _fmt_building_age,
     _fmt_commute,
@@ -18,6 +24,7 @@ from jkkwatcher.suumo_explain import (
     _fmt_walk,
     _man_yen,
     _merge_into_codes,
+    commute_to_station,
     explain_url,
     load_codes,
     save_codes,
@@ -121,6 +128,48 @@ with tempfile.TemporaryDirectory() as d:
     saved_ok = save_codes(codes, p)
     check("save_codes 成功", saved_ok is True, saved_ok)
     check("save→load round-trip 一致", load_codes(p) == codes, None)
+
+# ---------- 5. Suumo サマリ新フォーマット ----------
+
+print("\n=== 5. サマリ新フォーマット ===")
+check(
+    "commute_to_station(DEFAULT)=='渋谷まで: 20分・0回'",
+    commute_to_station(DEFAULT_SEARCH_URL) == "渋谷まで: 20分・0回",
+    commute_to_station(DEFAULT_SEARCH_URL),
+)
+check(
+    "ekInput/tj 無し URL は None",
+    commute_to_station("https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&ta=13") is None,
+    commute_to_station("https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&ta=13"),
+)
+
+raw_access = "西武有楽町線/練馬駅 歩3分 / 西武豊島線/豊島園駅 歩11分 / 都営大江戸線/豊島園駅 歩11分"
+check(
+    "access 集約 (駅単位で路線を / 連結)",
+    _format_suumo_access(raw_access)
+    == ["西武有楽町線/練馬駅 歩3分", "西武豊島線/都営大江戸線/豊島園駅 歩11分"],
+    _format_suumo_access(raw_access),
+)
+check("access 空 → []", _format_suumo_access("") == [], _format_suumo_access(""))
+
+check("floors '6階'+'地下1地上35階建' → '6/35階'", _suumo_floors("6階", "地下1地上35階建") == "6/35階", _suumo_floors("6階", "地下1地上35階建"))
+check("floors '2階'+'11階建' → '2/11階'", _suumo_floors("2階", "11階建") == "2/11階", _suumo_floors("2階", "11階建"))
+check("floors 所在階のみ → 'N階'", _suumo_floors("3階", "") == "3階", _suumo_floors("3階", ""))
+
+prop = SuumoProperty(
+    name="ディアマークスキャピタルタワー", area="練馬区", address="",
+    access=raw_access, age="築26年", building_floors="地下1地上35階建", floor="6階",
+    layout="1LDK", floor_area="52.96m²", rent="18万円", common_fee="-",
+    jnc="x", bc="y", detail_url="",
+)
+expected = (
+    "• *ディアマークスキャピタルタワー* (練馬区) / 18万円 / 52.96m² / 6/35階 / 築26年"
+    " / 西武有楽町線/練馬駅 歩3分 / 西武豊島線/都営大江戸線/豊島園駅 歩11分"
+    " / 渋谷まで: 20分・0回"
+)
+got = _suumo_summary_line(prop, commute="渋谷まで: 20分・0回")
+check("summary 行が新フォーマットに一致", got == expected, got)
+
 
 # ---------- 結果 ----------
 

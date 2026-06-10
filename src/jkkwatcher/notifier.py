@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from typing import Any, Callable, TypeVar
 
 import httpx
@@ -8,6 +9,7 @@ import httpx
 from .diff import Diff
 from .models import Property, PropertyLike, SuumoProperty, UrProperty
 from .scraper import INIT_URL
+from .suumo_explain import commute_to_station
 from .suumo_scraper import DEFAULT_SEARCH_URL as SUUMO_SEARCH_URL
 from .watchlist import NotifyConfig, Source
 
@@ -167,12 +169,69 @@ def _ur_summary_line(p: UrProperty) -> str:
     )
 
 
-def _suumo_summary_line(p: SuumoProperty) -> str:
-    name_md = f"<{p.detail_url}|{p.name}>" if p.detail_url else p.name
-    return (
-        f"• *{name_md}* ({p.area}) {p.floor} / {p.layout} / "
-        f"{p.floor_area} / {p.rent}"
+# 生 access の 1 行 "路線/駅 歩N分" を分解。路線名に "/" は無く、駅は "/" の後ろ。
+_SUUMO_ACCESS_RE = re.compile(r"^(.+?)/(.+?)\s*歩(\d+)分$")
+_FLOOR_NUM_RE = re.compile(r"(\d+)")
+_TOTAL_ABOVE_RE = re.compile(r"地上(\d+)階")  # "地下1地上35階建" → 35
+_TOTAL_KEN_RE = re.compile(r"(\d+)階建")  # "11階建" → 11
+
+
+def _format_suumo_access(access: str) -> list[str]:
+    """生 access を (駅,徒歩分) 単位で路線を集約し "路線/路線/駅 歩N分" のリストに。
+
+    例: "西武有楽町線/練馬駅 歩3分 / 西武豊島線/豊島園駅 歩11分 / 都営大江戸線/豊島園駅 歩11分"
+        → ["西武有楽町線/練馬駅 歩3分", "西武豊島線/都営大江戸線/豊島園駅 歩11分"]
+    パースできないエントリは原文のまま残す (捏造しない)。
+    """
+    if not access:
+        return []
+    order: list[tuple[str, str]] = []  # (駅, 徒歩分) の出現順
+    lines_by_key: dict[tuple[str, str], list[str]] = {}
+    extras: list[str] = []
+    for entry in access.split(" / "):
+        entry = entry.strip()
+        if not entry:
+            continue
+        m = _SUUMO_ACCESS_RE.match(entry)
+        if not m:
+            extras.append(entry)
+            continue
+        line, station, walk = m.group(1).strip(), m.group(2).strip(), m.group(3)
+        key = (station, walk)
+        if key not in lines_by_key:
+            lines_by_key[key] = []
+            order.append(key)
+        if line not in lines_by_key[key]:
+            lines_by_key[key].append(line)
+    formatted = [
+        f"{'/'.join(lines_by_key[(st, wk)] + [st])} 歩{wk}分" for st, wk in order
+    ]
+    return formatted + extras
+
+
+def _suumo_floors(floor: str, building_floors: str) -> str:
+    """所在階と建物総階数を "6/35階" に。欠損時はあるものだけ表示。"""
+    fm = _FLOOR_NUM_RE.search(floor or "")
+    floor_n = fm.group(1) if fm else ""
+    tm = _TOTAL_ABOVE_RE.search(building_floors or "") or _TOTAL_KEN_RE.search(
+        building_floors or ""
     )
+    total_n = tm.group(1) if tm else ""
+    if floor_n and total_n:
+        return f"{floor_n}/{total_n}階"
+    if floor_n:
+        return f"{floor_n}階"
+    return building_floors or ""
+
+
+def _suumo_summary_line(p: SuumoProperty, commute: str = "") -> str:
+    name_md = f"<{p.detail_url}|{p.name}>" if p.detail_url else p.name
+    parts = [p.rent, p.floor_area, _suumo_floors(p.floor, p.building_floors), p.age]
+    parts.extend(_format_suumo_access(p.access))
+    if commute:
+        parts.append(commute)
+    body = " / ".join(part for part in parts if part)
+    return f"• *{name_md}* ({p.area}) / {body}"
 
 
 # ---------- Renderer (ソース別の見た目を束ねる) ----------
@@ -533,8 +592,18 @@ def build_suumo_messages(
     current: list[SuumoProperty],
     *,
     notify_config: NotifyConfig | None = None,
+    search_url: str | None = None,
 ) -> list[dict[str, Any]]:
-    return build_messages(diff, current, SUUMO_RENDERER, notify_config=notify_config)
+    # サマリ行末の「○○駅まで: N分・M回」は検索 URL (ekInput/tj/nk) 由来で全件共通。
+    # 通勤条件付き検索のときだけ summary formatter を差し替えて注入する。
+    renderer = SUUMO_RENDERER
+    commute = commute_to_station(search_url) if search_url else None
+    if commute:
+        renderer = replace(
+            SUUMO_RENDERER,
+            summary_line_formatter=lambda p: _suumo_summary_line(p, commute=commute),
+        )
+    return build_messages(diff, current, renderer, notify_config=notify_config)
 
 
 def notify_all(

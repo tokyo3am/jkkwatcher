@@ -502,7 +502,9 @@ def suumo_watch(
             diff_mod.save_state(state, current)
         return
 
-    payloads = notifier.build_suumo_messages(delta, current, notify_config=notify_config)
+    payloads = notifier.build_suumo_messages(
+        delta, current, notify_config=notify_config, search_url=resolved_url
+    )
     if dry_run:
         typer.echo(json.dumps(payloads, ensure_ascii=False, indent=2))
         return

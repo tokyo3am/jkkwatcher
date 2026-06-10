@@ -328,6 +328,24 @@ def explain_url(
     return _build_explanation(url, query, codes, ta, online_keys)
 
 
+def commute_to_station(url: str, *, codes_path: Path = _DATA_PATH) -> str | None:
+    """検索 URL の起点駅(ekInput)+所要時間(tj)+乗換(nk) を「渋谷まで: 20分・0回」形式に。
+
+    通勤条件 (ekInput と tj) が無い検索では None を返す。辞書は offline 参照のみ。
+    """
+    query = _parse_query(url)
+    ek = _first(query, "ekInput")
+    tj = _first(query, "tj")
+    if not ek or not tj:
+        return None
+    ta = _first(query, "ta")
+    codes = load_codes(codes_path)
+    station = _lookup(codes, "ek", ek.zfill(5), ta) or f"駅{ek}"
+    nk = _first(query, "nk")
+    tail = f"・{nk}回" if nk not in (None, "") else ""
+    return f"{station}まで: {tj}分{tail}"
+
+
 def _build_explanation(
     url: str,
     query: dict[str, list[str]],
