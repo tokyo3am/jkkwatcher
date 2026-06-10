@@ -69,6 +69,9 @@ jobs:
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           JKKWATCHER_CONFIG_JSON: ${{ vars.JKKWATCHER_CONFIG_JSON }}
+          # 未設定なら空文字 → CLI 側で組み込みデフォルト URL にフォールバック。
+          # URL 差し替えは `gh variable set SUUMO_SEARCH_URL --body '<url>'` のみで可。
+          SUUMO_SEARCH_URL: ${{ vars.SUUMO_SEARCH_URL }}
         run: uv run jkkwatcher suumo watch --state state-suumo.json
 
       - name: Persist state to `state` branch

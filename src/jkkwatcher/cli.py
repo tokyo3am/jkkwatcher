@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from enum import Enum
 from pathlib import Path
 from typing import Annotated
@@ -13,6 +14,7 @@ from . import diff as diff_mod
 from . import notifier
 from .models import KU_CODES, SKCS_CODES, Area, Property, SuumoProperty, UrProperty
 from .scraper import JkkScraper
+from .suumo_explain import SuumoSearchExplanation, explain_url
 from .suumo_scraper import DEFAULT_SEARCH_URL as SUUMO_DEFAULT_URL, SuumoScraper
 from .ur_scraper import UrScraper
 from .watchlist import NotifyConfig
@@ -21,6 +23,16 @@ from .watchlist import NotifyConfig
 class OutputFormat(str, Enum):
     TABLE = "table"
     JSON = "json"
+
+
+# Suumo 検索 URL の解決優先順位: --url > 環境変数 SUUMO_SEARCH_URL > 組み込みデフォルト。
+# GitHub Actions の `vars.SUUMO_SEARCH_URL` 未設定時は空文字で渡るため、空も安全に
+# フォールバックさせる (`or` 連鎖)。
+SUUMO_URL_ENVVAR = "SUUMO_SEARCH_URL"
+
+
+def _resolve_suumo_url(url: str | None) -> str:
+    return url or os.environ.get(SUUMO_URL_ENVVAR) or SUUMO_DEFAULT_URL
 
 
 app = typer.Typer(
@@ -388,19 +400,22 @@ def ur_diff(
 @suumo_app.command("search")
 def suumo_search(
     url: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--url",
-            help="Suumo 検索 URL。未指定時は組み込みのデフォルト URL を使用。",
+            help=(
+                "Suumo 検索 URL。未指定時は環境変数 $SUUMO_SEARCH_URL、"
+                "無ければ組み込みのデフォルト URL を使用。"
+            ),
         ),
-    ] = SUUMO_DEFAULT_URL,
+    ] = None,
     output: Annotated[
         OutputFormat, typer.Option("--output", "-o", help="出力形式")
     ] = OutputFormat.TABLE,
 ) -> None:
     """Suumo の空き部屋を検索して一覧表示する。"""
     console = Console()
-    with SuumoScraper(search_url=url) as scraper:
+    with SuumoScraper(search_url=_resolve_suumo_url(url)) as scraper:
         with console.status("[cyan]Suumo に問い合わせ中..."):
             properties = scraper.search()
     _render_suumo(properties, output, console)
@@ -422,12 +437,15 @@ def suumo_watch(
         ),
     ] = None,
     url: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--url",
-            help="Suumo 検索 URL。未指定時は組み込みのデフォルト URL を使用。",
+            help=(
+                "Suumo 検索 URL。未指定時は環境変数 $SUUMO_SEARCH_URL、"
+                "無ければ組み込みのデフォルト URL を使用。"
+            ),
         ),
-    ] = SUUMO_DEFAULT_URL,
+    ] = None,
     dry_run: Annotated[
         bool,
         typer.Option(
@@ -439,7 +457,7 @@ def suumo_watch(
     """Suumo の空き部屋を取得し、前回 state との差分があれば Slack に通知する。"""
     console = Console(stderr=True)
     notify_config = NotifyConfig.from_env()
-    with SuumoScraper(search_url=url) as scraper:
+    with SuumoScraper(search_url=_resolve_suumo_url(url)) as scraper:
         with console.status("[cyan]Suumo に問い合わせ中..."):
             current = scraper.search()
 
@@ -476,19 +494,22 @@ def suumo_watch(
 @suumo_app.command("ids")
 def suumo_ids(
     url: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--url",
-            help="Suumo 検索 URL。未指定時は組み込みのデフォルト URL を使用。",
+            help=(
+                "Suumo 検索 URL。未指定時は環境変数 $SUUMO_SEARCH_URL、"
+                "無ければ組み込みのデフォルト URL を使用。"
+            ),
         ),
-    ] = SUUMO_DEFAULT_URL,
+    ] = None,
     output: Annotated[
         OutputFormat, typer.Option("--output", "-o", help="出力形式")
     ] = OutputFormat.TABLE,
 ) -> None:
     """Suumo の建物 key 一覧を出力する (watchlist 作成用)。"""
     console = Console()
-    with SuumoScraper(search_url=url) as scraper:
+    with SuumoScraper(search_url=_resolve_suumo_url(url)) as scraper:
         with console.status("[cyan]Suumo に問い合わせ中..."):
             properties = scraper.search()
     _render_building_ids(properties, output, console)
@@ -501,25 +522,59 @@ def suumo_diff(
         typer.Option("--state", "-s", help="比較対象の state JSON ファイル"),
     ] = Path("state-suumo.json"),
     url: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--url",
-            help="Suumo 検索 URL。未指定時は組み込みのデフォルト URL を使用。",
+            help=(
+                "Suumo 検索 URL。未指定時は環境変数 $SUUMO_SEARCH_URL、"
+                "無ければ組み込みのデフォルト URL を使用。"
+            ),
         ),
-    ] = SUUMO_DEFAULT_URL,
+    ] = None,
     output: Annotated[
         OutputFormat, typer.Option("--output", "-o", help="出力形式")
     ] = OutputFormat.TABLE,
 ) -> None:
     """state-suumo.json と現在スクレイプ結果の差分だけを出す (state は更新しない)。"""
     console = Console(stderr=True)
-    with SuumoScraper(search_url=url) as scraper:
+    with SuumoScraper(search_url=_resolve_suumo_url(url)) as scraper:
         with console.status("[cyan]Suumo に問い合わせ中..."):
             current = scraper.search()
 
     previous = diff_mod.load_suumo_state(state)
     delta = diff_mod.compute(previous, current)
     _render_suumo_diff(delta, output, console)
+
+
+@suumo_app.command("explain")
+def suumo_explain(
+    url: Annotated[
+        str | None,
+        typer.Option(
+            "--url",
+            help=(
+                "解釈する Suumo 検索 URL。未指定時は環境変数 $SUUMO_SEARCH_URL、"
+                "無ければ組み込みのデフォルト URL を使用。"
+            ),
+        ),
+    ] = None,
+    offline: Annotated[
+        bool,
+        typer.Option("--offline", help="オンライン解決を行わず辞書のみで解釈する。"),
+    ] = False,
+    output: Annotated[
+        OutputFormat, typer.Option("--output", "-o", help="出力形式")
+    ] = OutputFormat.TABLE,
+) -> None:
+    """Suumo 検索 URL を人間可読に解釈する。未知コードはオンライン解決して辞書へ追記。"""
+    resolved_url = _resolve_suumo_url(url)
+    console = Console()
+    if offline:
+        explanation = explain_url(resolved_url, offline=True)
+    else:
+        with console.status("[cyan]未知コードをオンライン解決中..."):
+            explanation = explain_url(resolved_url, offline=False)
+    _render_suumo_explain(explanation, output, console)
 
 
 # ---------- renderers ----------
@@ -783,6 +838,53 @@ def _suumo_table(
             p.jnc,
         )
     return table
+
+
+def _render_suumo_explain(
+    exp: SuumoSearchExplanation, output: OutputFormat, console: Console
+) -> None:
+    if output is OutputFormat.JSON:
+        typer.echo(json.dumps(exp.to_dict(), ensure_ascii=False, indent=2))
+        return
+
+    table = Table(title="Suumo 検索条件")
+    table.add_column("項目", style="cyan", no_wrap=True)
+    table.add_column("内容")
+
+    def row(label: str, value: str | None) -> None:
+        if value:
+            table.add_row(label, value)
+
+    row("都道府県", exp.prefecture.display if exp.prefecture else None)
+    row("地方", exp.region.display if exp.region else None)
+    row("物件種別", exp.property_kind.display if exp.property_kind else None)
+    row("建物種別", " / ".join(c.display for c in exp.building_types))
+    row("賃料", exp.rent)
+    row("専有面積", exp.floor_area)
+    row("築年数", exp.building_age)
+    row("駅", exp.station.display if exp.station else None)
+    row("駅徒歩", exp.walk_minutes)
+    row("通勤条件", exp.commute)
+    if exp.lines:
+        row(f"沿線 ({len(exp.lines)}本)", "\n".join(c.display for c in exp.lines))
+    if exp.features:
+        row("こだわり条件", "\n".join(c.display for c in exp.features))
+    row("並び順", exp.sort_order.display if exp.sort_order else None)
+    console.print(table)
+
+    extras = exp.uncertain + exp.unresolved
+    if extras:
+        warn = Table(title="その他・未解決 (推定/未確定)", title_style="yellow")
+        warn.add_column("内容", style="dim")
+        for line in extras:
+            warn.add_row(line)
+        console.print(warn)
+
+    if exp.newly_resolved:
+        console.print(
+            f"[green]辞書に {len(exp.newly_resolved)} 件を追記しました "
+            "(オンライン解決)。[/green]"
+        )
 
 
 def main() -> None:

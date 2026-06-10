@@ -11,18 +11,17 @@ from .models import SuumoProperty
 
 SITE_ORIGIN = "https://suumo.jp"
 
-# `--url` で実行時に上書き可能。
+# `--url` / 環境変数 `SUUMO_SEARCH_URL` で実行時に上書き可能。
 DEFAULT_SEARCH_URL = (
     "https://suumo.jp/jj/chintai/ichiran/FR301FC001/"
-    "?ar=030&bs=040&pc=50&smk=&po1=16&po2=99&kz=1"
-    "&tc=0401303&tc=0400302&tc=0400205&tc=0400905&tc=0401002"
-    "&shkr1=03&shkr2=03&shkr3=03&shkr4=03"
-    "&ekInput=17640"
-    "&rn=0350&rn=0370&rn=0395&rn=0205&rn=0230&rn=0240&rn=0265&rn=0275&rn=0280&rn=0305"
+    "?ar=030&bs=040&smk=r01&ta=13"
     "&rn=0005&rn=0010&rn=0015&rn=0025&rn=0030&rn=0035&rn=0040&rn=0043&rn=0045&rn=0050"
-    "&rn=0060&rn=0065&rn=0070&rn=0573&rn=7580&rn=7585"
-    "&ta=13&kskbn=01&tj=20&nk=0&cb=0.0&ct=20.0&co=1&ts=1&et=10&mb=40&cn=9999999"
-    "&tc=0400301&tc=0400101&fw2="
+    "&rn=0060&rn=0065&rn=0070&rn=0205&rn=0230&rn=0240&rn=0265&rn=0275&rn=0280&rn=0305"
+    "&rn=0350&rn=0370&rn=0395&rn=0573&rn=7580&rn=7585"
+    "&cb=0.0&ct=20.0&mb=40&ts=1&et=10&cn=9999999&co=1&kz=1"
+    "&tc=0401303&tc=0400101&tc=0400301&tc=0400302&tc=0400205&tc=0400905&tc=0401002"
+    "&shkr1=03&shkr2=03&shkr3=03&shkr4=03"
+    "&ekInput=17640&nk=0&tj=20&sngz=&po1=16&pc=50"
 )
 
 USER_AGENT = (
