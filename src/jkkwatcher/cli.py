@@ -35,6 +35,18 @@ def _resolve_suumo_url(url: str | None) -> str:
     return url or os.environ.get(SUUMO_URL_ENVVAR) or SUUMO_DEFAULT_URL
 
 
+def _explain_to_stderr(url: str, show: bool) -> None:
+    """--explain 指定時、検索条件サマリを stderr に表示する。
+
+    スクレイプ本体に余計な通信を足さないよう offline=True (無通信・辞書を書き換えない)。
+    未知コードは「(未解決)」のまま表示する。
+    """
+    if not show:
+        return
+    explanation = explain_url(url, offline=True)
+    _render_suumo_explain(explanation, OutputFormat.TABLE, Console(stderr=True))
+
+
 app = typer.Typer(
     context_settings={"help_option_names": ["-h", "--help"]},
     help="JKK 東京 / UR 賃貸の空き物件監視ツール",
@@ -412,10 +424,18 @@ def suumo_search(
     output: Annotated[
         OutputFormat, typer.Option("--output", "-o", help="出力形式")
     ] = OutputFormat.TABLE,
+    explain: Annotated[
+        bool,
+        typer.Option(
+            "--explain", help="検索条件を人間可読に解釈して stderr に表示する。"
+        ),
+    ] = False,
 ) -> None:
     """Suumo の空き部屋を検索して一覧表示する。"""
     console = Console()
-    with SuumoScraper(search_url=_resolve_suumo_url(url)) as scraper:
+    resolved_url = _resolve_suumo_url(url)
+    _explain_to_stderr(resolved_url, explain)
+    with SuumoScraper(search_url=resolved_url) as scraper:
         with console.status("[cyan]Suumo に問い合わせ中..."):
             properties = scraper.search()
     _render_suumo(properties, output, console)
@@ -453,11 +473,19 @@ def suumo_watch(
             help="Slack に投げず state 更新もスキップ。ペイロードを stdout に出すだけ",
         ),
     ] = False,
+    explain: Annotated[
+        bool,
+        typer.Option(
+            "--explain", help="検索条件を人間可読に解釈して stderr に表示する。"
+        ),
+    ] = False,
 ) -> None:
     """Suumo の空き部屋を取得し、前回 state との差分があれば Slack に通知する。"""
     console = Console(stderr=True)
     notify_config = NotifyConfig.from_env()
-    with SuumoScraper(search_url=_resolve_suumo_url(url)) as scraper:
+    resolved_url = _resolve_suumo_url(url)
+    _explain_to_stderr(resolved_url, explain)
+    with SuumoScraper(search_url=resolved_url) as scraper:
         with console.status("[cyan]Suumo に問い合わせ中..."):
             current = scraper.search()
 
@@ -506,10 +534,18 @@ def suumo_ids(
     output: Annotated[
         OutputFormat, typer.Option("--output", "-o", help="出力形式")
     ] = OutputFormat.TABLE,
+    explain: Annotated[
+        bool,
+        typer.Option(
+            "--explain", help="検索条件を人間可読に解釈して stderr に表示する。"
+        ),
+    ] = False,
 ) -> None:
     """Suumo の建物 key 一覧を出力する (watchlist 作成用)。"""
     console = Console()
-    with SuumoScraper(search_url=_resolve_suumo_url(url)) as scraper:
+    resolved_url = _resolve_suumo_url(url)
+    _explain_to_stderr(resolved_url, explain)
+    with SuumoScraper(search_url=resolved_url) as scraper:
         with console.status("[cyan]Suumo に問い合わせ中..."):
             properties = scraper.search()
     _render_building_ids(properties, output, console)
@@ -534,10 +570,18 @@ def suumo_diff(
     output: Annotated[
         OutputFormat, typer.Option("--output", "-o", help="出力形式")
     ] = OutputFormat.TABLE,
+    explain: Annotated[
+        bool,
+        typer.Option(
+            "--explain", help="検索条件を人間可読に解釈して stderr に表示する。"
+        ),
+    ] = False,
 ) -> None:
     """state-suumo.json と現在スクレイプ結果の差分だけを出す (state は更新しない)。"""
     console = Console(stderr=True)
-    with SuumoScraper(search_url=_resolve_suumo_url(url)) as scraper:
+    resolved_url = _resolve_suumo_url(url)
+    _explain_to_stderr(resolved_url, explain)
+    with SuumoScraper(search_url=resolved_url) as scraper:
         with console.status("[cyan]Suumo に問い合わせ中..."):
             current = scraper.search()
 
