@@ -10,8 +10,11 @@ import tempfile
 from pathlib import Path
 
 from jkkwatcher.cli import SUUMO_URL_ENVVAR, _resolve_suumo_url
+from jkkwatcher.line_emoji import route_emoji
 from jkkwatcher.models import SuumoProperty
 from jkkwatcher.notifier import (
+    _STATION_SEP,
+    _SUMMARY_INDENT,
     _format_commute,
     _format_suumo_access,
     _suumo_floors,
@@ -144,8 +147,8 @@ with tempfile.TemporaryDirectory() as d:
 
 print("\n=== 5. サマリ新フォーマット ===")
 check(
-    "_format_commute('渋谷駅（20分・0回）')=='渋谷まで: 20分・0回'",
-    _format_commute("渋谷駅（20分・0回）") == "渋谷まで: 20分・0回",
+    "_format_commute('渋谷駅（20分・0回）')=='渋谷まで: 20分/0回'",
+    _format_commute("渋谷駅（20分・0回）") == "渋谷まで: 20分/0回",
     _format_commute("渋谷駅（20分・0回）"),
 )
 check("_format_commute('') == ''", _format_commute("") == "", _format_commute(""))
@@ -155,14 +158,45 @@ check(
     _format_commute("バス15分"),
 )
 
+# --- 路線名 → 絵文字 マッピング ---
+check("全角JR正規化 ＪＲ山手線→jr-yamanote", route_emoji("ＪＲ山手線") == "jr-yamanote", route_emoji("ＪＲ山手線"))
+check("エイリアス 小田急線→odakyu", route_emoji("小田急線") == "odakyu", route_emoji("小田急線"))
+check("エイリアス 京王新線→keio", route_emoji("京王新線") == "keio", route_emoji("京王新線"))
+check("新規 東急目黒線→tokyu-meguro", route_emoji("東急目黒線") == "tokyu-meguro", route_emoji("東急目黒線"))
+check("未登録→None (つくばエクスプレス)", route_emoji("つくばエクスプレス") is None, route_emoji("つくばエクスプレス"))
+
+# --- access の絵文字化 ---
 raw_access = "西武有楽町線/練馬駅 歩3分 / 西武豊島線/豊島園駅 歩11分 / 都営大江戸線/豊島園駅 歩11分"
 check(
-    "access 集約 (駅単位で路線を / 連結)",
+    "access 集約 (駅単位でロゴ連結, 西武→seibu-ikebukuro エイリアス)",
     _format_suumo_access(raw_access)
-    == ["西武有楽町線/練馬駅 歩3分", "西武豊島線/都営大江戸線/豊島園駅 歩11分"],
+    == [":seibu-ikebukuro: 練馬駅 歩3分", ":seibu-ikebukuro::toei-oedo: 豊島園駅 歩11分"],
     _format_suumo_access(raw_access),
 )
 check("access 空 → []", _format_suumo_access("") == [], _format_suumo_access(""))
+check(
+    "ロゴ重複除去 (京王線+京王新線→:keio:1つ)",
+    _format_suumo_access("京王線/笹塚駅 歩3分 / 京王新線/笹塚駅 歩3分")
+    == [":keio: 笹塚駅 歩3分"],
+    _format_suumo_access("京王線/笹塚駅 歩3分 / 京王新線/笹塚駅 歩3分"),
+)
+check(
+    "ロゴ+未登録テキスト混在 (絵文字→テキスト名→駅 の順)",
+    _format_suumo_access("東急目黒線/大岡山駅 歩1分 / 東急池上線/大岡山駅 歩1分")
+    == [":tokyu-meguro: 東急池上線 大岡山駅 歩1分"],
+    _format_suumo_access("東急目黒線/大岡山駅 歩1分 / 東急池上線/大岡山駅 歩1分"),
+)
+check(
+    "全角JRの駅情報",
+    _format_suumo_access("ＪＲ山手線/渋谷駅 歩5分") == [":jr-yamanote: 渋谷駅 歩5分"],
+    _format_suumo_access("ＪＲ山手線/渋谷駅 歩5分"),
+)
+check(
+    "パース不能エントリは原文のまま末尾に残す",
+    _format_suumo_access("京王線/明大前駅 歩10分 / バス20分 北口")
+    == [":keio: 明大前駅 歩10分", "バス20分 北口"],
+    _format_suumo_access("京王線/明大前駅 歩10分 / バス20分 北口"),
+)
 
 check("floors '6階'+'地下1地上35階建' → '6/35階'", _suumo_floors("6階", "地下1地上35階建") == "6/35階", _suumo_floors("6階", "地下1地上35階建"))
 check("floors '2階'+'11階建' → '2/11階'", _suumo_floors("2階", "11階建") == "2/11階", _suumo_floors("2階", "11階建"))
@@ -174,13 +208,16 @@ prop = SuumoProperty(
     layout="1LDK", floor_area="52.96m²", rent="18万円", common_fee="-",
     jnc="x", bc="y", detail_url="", commute="渋谷駅（20分・0回）",
 )
-expected = (
-    "• *ディアマークスキャピタルタワー* (練馬区) / 18万円 / 52.96m² / 6/35階 / 築26年"
-    " / 西武有楽町線/練馬駅 歩3分 / 西武豊島線/都営大江戸線/豊島園駅 歩11分"
-    " / 渋谷まで: 20分・0回"
-)
+expected = "\n".join([
+    "•  ディアマークスキャピタルタワー (練馬区)",
+    _SUMMARY_INDENT + "18万円 ・ 52.96m² ・ 6/35階 ・ 築26年 ・ 渋谷まで: 20分/0回",
+    _SUMMARY_INDENT + _STATION_SEP.join([
+        ":seibu-ikebukuro: 練馬駅 歩3分",
+        ":seibu-ikebukuro::toei-oedo: 豊島園駅 歩11分",
+    ]),
+])
 got = _suumo_summary_line(prop)
-check("summary 行が新フォーマットに一致 (物件別 commute)", got == expected, got)
+check("summary 行が 3 行新フォーマットに一致 (物件別 commute)", got == expected, got)
 prop_no_commute = SuumoProperty(
     name="X", area="中央区", address="", access="", age="", building_floors="",
     floor="2階", layout="1K", floor_area="25m²", rent="9万円", common_fee="-",
@@ -189,6 +226,11 @@ prop_no_commute = SuumoProperty(
 check(
     "commute 空なら通勤を出さない",
     "まで:" not in _suumo_summary_line(prop_no_commute),
+    _suumo_summary_line(prop_no_commute),
+)
+check(
+    "access 空なら駅行を出さない (2 行のみ)",
+    _suumo_summary_line(prop_no_commute).count("\n") == 1,
     _suumo_summary_line(prop_no_commute),
 )
 

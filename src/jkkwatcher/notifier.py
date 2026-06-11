@@ -7,6 +7,7 @@ from typing import Any, Callable, TypeVar
 import httpx
 
 from .diff import Diff
+from .line_emoji import route_emoji
 from .models import Property, PropertyLike, SuumoProperty, UrProperty
 from .scraper import INIT_URL
 from .suumo_scraper import DEFAULT_SEARCH_URL as SUUMO_SEARCH_URL
@@ -128,11 +129,20 @@ def _ur_card(prop: UrProperty) -> list[dict[str, Any]]:
 
 def _suumo_card(prop: SuumoProperty) -> list[dict[str, Any]]:
     name_md = f"<{prop.detail_url}|{prop.name}>" if prop.detail_url else prop.name
+    meta = " ・ ".join(
+        part
+        for part in (prop.area, prop.age, _format_commute(prop.commute))
+        if part
+    )
+    text_lines = [f"*{name_md}*"]
+    if meta:
+        text_lines.append(meta)
+    text_lines.extend(_format_suumo_access(prop.access))
     section: dict[str, Any] = {
         "type": "section",
         "text": {
             "type": "mrkdwn",
-            "text": f"*{name_md}*\n{prop.area}・{prop.age}・{prop.access}",
+            "text": "\n".join(text_lines),
         },
         "fields": [
             {"type": "mrkdwn", "text": f"*間取り*\n{prop.layout}"},
@@ -177,22 +187,45 @@ _COMMUTE_RE = re.compile(r"^(.+?)駅（(.+?)）$")  # "渋谷駅（20分・0回�
 
 
 def _format_commute(raw: str) -> str:
-    """物件の目的駅所要時間 "渋谷駅（20分・0回）" → "渋谷まで: 20分・0回"。
+    """物件の目的駅所要時間 "渋谷駅（20分・0回）" → "渋谷まで: 20分/0回"。
 
     形式が違えば原文のまま (捏造しない)。空なら空。
     """
     if not raw:
         return ""
     m = _COMMUTE_RE.match(raw)
-    return f"{m.group(1)}まで: {m.group(2)}" if m else raw
+    # 括弧内の区切りは中点 "20分・0回" だが、階数 "3/5階" と表記を揃えてスラッシュにする。
+    return f"{m.group(1)}まで: {m.group(2).replace('・', '/')}" if m else raw
+
+
+def _render_lines(lines: list[str]) -> str:
+    """路線名リストを「連結ロゴ + 未登録路線名」表記にする。
+
+    登録済み路線はロゴ絵文字 (重複除去)、未登録路線は日本語名のまま。
+    例: ["京王線", "東急世田谷線"] → ":keio::tokyu-setagaya:"
+        ["東急目黒線", "東急池上線"] → ":tokyu-meguro: 東急池上線"
+    """
+    emojis: list[str] = []
+    texts: list[str] = []
+    for line in lines:
+        name = route_emoji(line)
+        if name is None:
+            if line not in texts:
+                texts.append(line)
+        elif name not in emojis:
+            emojis.append(name)
+    emoji_part = "".join(f":{n}:" for n in emojis)
+    text_part = "/".join(texts)
+    return " ".join(p for p in (emoji_part, text_part) if p)
 
 
 def _format_suumo_access(access: str) -> list[str]:
-    """生 access を (駅,徒歩分) 単位で路線を集約し "路線/路線/駅 歩N分" のリストに。
+    """生 access を (駅,徒歩分) 単位で集約し "ロゴ… 駅 歩N分" のリストにする。
 
-    例: "西武有楽町線/練馬駅 歩3分 / 西武豊島線/豊島園駅 歩11分 / 都営大江戸線/豊島園駅 歩11分"
-        → ["西武有楽町線/練馬駅 歩3分", "西武豊島線/都営大江戸線/豊島園駅 歩11分"]
-    パースできないエントリは原文のまま残す (捏造しない)。
+    例: "京王線/下高井戸駅 歩4分 / 東急世田谷線/下高井戸駅 歩4分"
+        → [":keio::tokyu-setagaya: 下高井戸駅 歩4分"]
+    路線ロゴは駅単位で連結 (重複除去)。未登録路線は日本語名で表示。
+    パースできないエントリは原文のまま末尾に残す (捏造しない)。
     """
     if not access:
         return []
@@ -215,7 +248,7 @@ def _format_suumo_access(access: str) -> list[str]:
         if line not in lines_by_key[key]:
             lines_by_key[key].append(line)
     formatted = [
-        f"{'/'.join(lines_by_key[(st, wk)] + [st])} 歩{wk}分" for st, wk in order
+        f"{_render_lines(lines_by_key[(st, wk)])} {st} 歩{wk}分" for st, wk in order
     ]
     return formatted + extras
 
@@ -235,15 +268,40 @@ def _suumo_floors(floor: str, building_floors: str) -> str:
     return building_floors or ""
 
 
+# サマリ 3 行レイアウト (描画検証後に差し替え可能なよう定数化)。
+# Slack section の mrkdwn は通常スペースを保持するが、詰まる場合は
+# U+2007 (FIGURE SPACE) 等への差し替えを検討する。
+_SUMMARY_INDENT = "     "  # line2/line3 の行頭インデント (5 spaces)
+_STATION_SEP = "   "  # line3 の駅情報どうしの区切り (3 spaces)
+
+
 def _suumo_summary_line(p: SuumoProperty) -> str:
+    """物件 1 件を 3 行ブロックにする。
+
+    例:
+        •  ファインスクェア明大前 (世田谷区)
+             20万円 ・ 43.38m² ・ 3/5階 ・ 築6年 ・ 渋谷まで: 7分/0回
+             :keio::tokyu-setagaya: 下高井戸駅 歩4分   :keio::keio-inokashira: 明大前駅 歩10分
+    """
     name_md = f"<{p.detail_url}|{p.name}>" if p.detail_url else p.name
-    parts = [p.rent, p.floor_area, _suumo_floors(p.floor, p.building_floors), p.age]
-    parts.extend(_format_suumo_access(p.access))
-    commute = _format_commute(p.commute)
-    if commute:
-        parts.append(commute)
-    body = " / ".join(part for part in parts if part)
-    return f"• *{name_md}* ({p.area}) / {body}"
+    lines = [f"•  {name_md} ({p.area})"]
+
+    meta = [
+        p.rent,
+        p.floor_area,
+        _suumo_floors(p.floor, p.building_floors),
+        p.age,
+        _format_commute(p.commute),
+    ]
+    body = " ・ ".join(part for part in meta if part)
+    if body:
+        lines.append(_SUMMARY_INDENT + body)
+
+    access = _format_suumo_access(p.access)
+    if access:
+        lines.append(_SUMMARY_INDENT + _STATION_SEP.join(access))
+
+    return "\n".join(lines)
 
 
 # ---------- Renderer (ソース別の見た目を束ねる) ----------

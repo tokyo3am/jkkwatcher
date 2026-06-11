@@ -265,3 +265,5 @@ override.tf.json
 *_override.tf.json
 
 watchlist_config.json
+
+tools/slack-emoji/regist_emoji.sh

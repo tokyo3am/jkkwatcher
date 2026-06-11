@@ -4,6 +4,7 @@ from __future__ import annotations
 from jkkwatcher.diff import Diff
 from jkkwatcher.models import Property, SuumoProperty, UrProperty
 from jkkwatcher.notifier import (
+    _suumo_summary_line,
     build_jkk_messages,
     build_suumo_messages,
     build_ur_messages,
@@ -92,11 +93,13 @@ summarize_messages(
 
 suumo_props = [
     SuumoProperty(
-        name=f"Suumo物件{i}", area="中央区", address="", access="アクセス情報",
-        age="築10年", building_floors="", floor=f"{i + 1}階",
-        layout="1LDK", floor_area="40m²", rent="13万円", common_fee="-",
+        name=f"ファインスクェア明大前{i}", area="世田谷区", address="",
+        access="京王線/明大前駅 歩10分 / 京王井の頭線/明大前駅 歩10分 / 東急世田谷線/下高井戸駅 歩4分",
+        age="築6年", building_floors="地上5階建", floor=f"{i % 5 + 1}階",
+        layout="1LDK", floor_area="43.38m²", rent="20万円", common_fee="-",
         jnc=f"jnc{i}", bc=f"bc{i}",
         detail_url=f"https://suumo.jp/chintai/jnc_{i:09d}/?bc=100{i:09d}",
+        commute="渋谷駅（7分・0回）",
     )
     for i in range(43)
 ]
@@ -105,6 +108,8 @@ summarize_messages(
     "G. Suumo 24 added / 5 removed / 43 current",
     build_suumo_messages(suumo_diff, suumo_props, notify_config=cfg_default),
 )
+print("\n--- Suumo サマリ行サンプル (3 行レイアウト) ---")
+print(_suumo_summary_line(suumo_props[0]))
 
 # ---------- 上限近傍テスト: 多数の added/removed で trim 確認 ----------
 
