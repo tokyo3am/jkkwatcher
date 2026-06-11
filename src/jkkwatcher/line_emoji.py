@@ -23,12 +23,16 @@ _ROUTE_EMOJI: dict[str, str] = {
     "都営新宿線": "toei-shinjuku",
     "都営大江戸線": "toei-oedo",
     "都電荒川線": "toden-arakawa",
+    "東京さくらトラム（都電荒川線）": "toden-arakawa",  # ekidata 表記
     # --- JR (キーは半角 JR。全角 ＪＲ は _normalize で吸収) ---
     "JR山手線": "jr-yamanote",
     "JR京浜東北線": "jr-keihintohoku",
     "JR埼京線": "jr-saikyo",
     "JR中央線": "jr-chuo-rapid",  # Suumo「ＪＲ中央線」→ 中央線快速ロゴ
+    "JR中央線(快速)": "jr-chuo-rapid",  # ekidata 表記
+    "JR中央本線(東京～塩尻)": "jr-chuo-rapid",  # ekidata 表記 (東京近郊)
     "JR総武線": "jr-chuo-sobu",  # Suumo「ＪＲ総武線」→ 中央・総武各停ロゴ
+    "JR中央・総武線": "jr-chuo-sobu",  # ekidata 表記
     "湘南新宿ライン": "jr-shonan-shinjuku",
     "JR湘南新宿ライン": "jr-shonan-shinjuku",
     # --- 東急 ---
@@ -39,10 +43,14 @@ _ROUTE_EMOJI: dict[str, str] = {
     # --- 京王 ---
     "京王線": "keio",
     "京王新線": "keio",
+    "京王相模原線": "keio",  # ekidata
+    "京王高尾線": "keio",  # ekidata
     "京王井の頭線": "keio-inokashira",
     # --- 小田急 ---
     "小田急線": "odakyu",
     "小田急小田原線": "odakyu",
+    "小田急江ノ島線": "odakyu",  # ekidata
+    "小田急多摩線": "odakyu",  # ekidata
     # --- 西武 ---
     "西武池袋線": "seibu-ikebukuro",
     "西武有楽町線": "seibu-ikebukuro",

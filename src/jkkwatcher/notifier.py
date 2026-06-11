@@ -10,6 +10,7 @@ from .diff import Diff
 from .line_emoji import route_emoji
 from .models import Property, PropertyLike, SuumoProperty, UrProperty
 from .scraper import INIT_URL
+from .station_lines import StationLineIndex, default_index
 from .suumo_scraper import DEFAULT_SEARCH_URL as SUUMO_SEARCH_URL
 from .watchlist import NotifyConfig, Source
 
@@ -23,6 +24,10 @@ SECTION_TEXT_SAFE_LIMIT = 2900  # 余裕 100 (改行・末尾装飾を考慮)
 
 # 新着/終了/ウォッチ一致セクションでの card 上限 (1 セクション内)
 MAX_DETAIL_CARDS = 8
+
+# 1 駅あたり表示する路線数の上限 (全路線補完でターミナル駅が氾濫しないよう)。
+# _render_lines の畳み前の路線名数で切る粗い上限。緩めにし、実害を見て調整。
+MAX_LINES_PER_STATION = 8
 
 # UR 検索結果ページ (フッターからリンクする用)
 UR_SEARCH_URL = (
@@ -219,16 +224,25 @@ def _render_lines(lines: list[str]) -> str:
     return " ".join(p for p in (emoji_part, text_part) if p)
 
 
-def _format_suumo_access(access: str) -> list[str]:
+def _format_suumo_access(
+    access: str, *, station_lines: StationLineIndex | None = None
+) -> list[str]:
     """生 access を (駅,徒歩分) 単位で集約し "ロゴ… 駅 歩N分" のリストにする。
 
-    例: "京王線/下高井戸駅 歩4分 / 東急世田谷線/下高井戸駅 歩4分"
-        → [":keio::tokyu-setagaya: 下高井戸駅 歩4分"]
+    Suumo は各駅につき一部の路線しか出さないため、駅→路線辞書 (station_lines)
+    を引いて乗り入れ全路線に補完する。Suumo 提示路線をアンカーに同名駅を一意化
+    し、引けなければ Suumo 提示のまま (捏造しない)。1 駅あたり
+    MAX_LINES_PER_STATION 本で打ち切る。station_lines 省略時は同梱辞書を
+    遅延ロードして使う。
+
+    例: "東急世田谷線/下高井戸駅 歩4分"  (Suumo は世田谷線しか出さない)
+        → [":tokyu-setagaya::keio: 下高井戸駅 歩4分"]  (京王線を補完)
     路線ロゴは駅単位で連結 (重複除去)。未登録路線は日本語名で表示。
     パースできないエントリは原文のまま末尾に残す (捏造しない)。
     """
     if not access:
         return []
+    index = station_lines if station_lines is not None else default_index()
     order: list[tuple[str, str]] = []  # (駅, 徒歩分) の出現順
     lines_by_key: dict[tuple[str, str], list[str]] = {}
     extras: list[str] = []
@@ -247,9 +261,10 @@ def _format_suumo_access(access: str) -> list[str]:
             order.append(key)
         if line not in lines_by_key[key]:
             lines_by_key[key].append(line)
-    formatted = [
-        f"{_render_lines(lines_by_key[(st, wk)])} {st} 歩{wk}分" for st, wk in order
-    ]
+    formatted: list[str] = []
+    for st, wk in order:
+        merged = index.complete(lines_by_key[(st, wk)], st)[:MAX_LINES_PER_STATION]
+        formatted.append(f"{_render_lines(merged)} {st} 歩{wk}分")
     return formatted + extras
 
 
@@ -275,7 +290,9 @@ _SUMMARY_INDENT = "     "  # line2/line3 の行頭インデント (5 spaces)
 _STATION_SEP = "   "  # line3 の駅情報どうしの区切り (3 spaces)
 
 
-def _suumo_summary_line(p: SuumoProperty) -> str:
+def _suumo_summary_line(
+    p: SuumoProperty, *, station_lines: StationLineIndex | None = None
+) -> str:
     """物件 1 件を 3 行ブロックにする。
 
     例:
@@ -297,7 +314,7 @@ def _suumo_summary_line(p: SuumoProperty) -> str:
     if body:
         lines.append(_SUMMARY_INDENT + body)
 
-    access = _format_suumo_access(p.access)
+    access = _format_suumo_access(p.access, station_lines=station_lines)
     if access:
         lines.append(_SUMMARY_INDENT + _STATION_SEP.join(access))
 

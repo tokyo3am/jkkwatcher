@@ -267,3 +267,6 @@ override.tf.json
 watchlist_config.json
 
 tools/slack-emoji/regist_emoji.sh
+
+# jkkwatcher: ekidata の生 CSV (生成物 station_lines.json だけコミットする)
+data/ekidata/raw/

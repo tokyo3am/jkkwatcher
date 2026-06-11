@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -20,6 +21,7 @@ from jkkwatcher.notifier import (
     _suumo_floors,
     _suumo_summary_line,
 )
+from jkkwatcher.station_lines import StationLineIndex
 from jkkwatcher.suumo_explain import (
     _fmt_building_age,
     _fmt_commute,
@@ -165,37 +167,101 @@ check("エイリアス 京王新線→keio", route_emoji("京王新線") == "kei
 check("新規 東急目黒線→tokyu-meguro", route_emoji("東急目黒線") == "tokyu-meguro", route_emoji("東急目黒線"))
 check("未登録→None (つくばエクスプレス)", route_emoji("つくばエクスプレス") is None, route_emoji("つくばエクスプレス"))
 
-# --- access の絵文字化 ---
+# --- access の絵文字化 (辞書補完なしのベースライン: 空 index を注入) ---
+# 既存挙動は「Suumo 提示路線のみ」。同梱辞書が将来増えても壊れないよう、補完を
+# 行わない空 index を明示注入して期待値を固定する。
+EMPTY_INDEX = StationLineIndex({})
 raw_access = "西武有楽町線/練馬駅 歩3分 / 西武豊島線/豊島園駅 歩11分 / 都営大江戸線/豊島園駅 歩11分"
 check(
     "access 集約 (駅単位でロゴ連結, 西武→seibu-ikebukuro エイリアス)",
-    _format_suumo_access(raw_access)
+    _format_suumo_access(raw_access, station_lines=EMPTY_INDEX)
     == [":seibu-ikebukuro: 練馬駅 歩3分", ":seibu-ikebukuro::toei-oedo: 豊島園駅 歩11分"],
-    _format_suumo_access(raw_access),
+    _format_suumo_access(raw_access, station_lines=EMPTY_INDEX),
 )
-check("access 空 → []", _format_suumo_access("") == [], _format_suumo_access(""))
+check(
+    "access 空 → []",
+    _format_suumo_access("", station_lines=EMPTY_INDEX) == [],
+    _format_suumo_access("", station_lines=EMPTY_INDEX),
+)
 check(
     "ロゴ重複除去 (京王線+京王新線→:keio:1つ)",
-    _format_suumo_access("京王線/笹塚駅 歩3分 / 京王新線/笹塚駅 歩3分")
+    _format_suumo_access("京王線/笹塚駅 歩3分 / 京王新線/笹塚駅 歩3分", station_lines=EMPTY_INDEX)
     == [":keio: 笹塚駅 歩3分"],
-    _format_suumo_access("京王線/笹塚駅 歩3分 / 京王新線/笹塚駅 歩3分"),
+    _format_suumo_access("京王線/笹塚駅 歩3分 / 京王新線/笹塚駅 歩3分", station_lines=EMPTY_INDEX),
 )
 check(
     "ロゴ+未登録テキスト混在 (絵文字→テキスト名→駅 の順)",
-    _format_suumo_access("東急目黒線/大岡山駅 歩1分 / 東急池上線/大岡山駅 歩1分")
+    _format_suumo_access("東急目黒線/大岡山駅 歩1分 / 東急池上線/大岡山駅 歩1分", station_lines=EMPTY_INDEX)
     == [":tokyu-meguro: 東急池上線 大岡山駅 歩1分"],
-    _format_suumo_access("東急目黒線/大岡山駅 歩1分 / 東急池上線/大岡山駅 歩1分"),
+    _format_suumo_access("東急目黒線/大岡山駅 歩1分 / 東急池上線/大岡山駅 歩1分", station_lines=EMPTY_INDEX),
 )
 check(
     "全角JRの駅情報",
-    _format_suumo_access("ＪＲ山手線/渋谷駅 歩5分") == [":jr-yamanote: 渋谷駅 歩5分"],
-    _format_suumo_access("ＪＲ山手線/渋谷駅 歩5分"),
+    _format_suumo_access("ＪＲ山手線/渋谷駅 歩5分", station_lines=EMPTY_INDEX)
+    == [":jr-yamanote: 渋谷駅 歩5分"],
+    _format_suumo_access("ＪＲ山手線/渋谷駅 歩5分", station_lines=EMPTY_INDEX),
 )
 check(
     "パース不能エントリは原文のまま末尾に残す",
-    _format_suumo_access("京王線/明大前駅 歩10分 / バス20分 北口")
+    _format_suumo_access("京王線/明大前駅 歩10分 / バス20分 北口", station_lines=EMPTY_INDEX)
     == [":keio: 明大前駅 歩10分", "バス20分 北口"],
-    _format_suumo_access("京王線/明大前駅 歩10分 / バス20分 北口"),
+    _format_suumo_access("京王線/明大前駅 歩10分 / バス20分 北口", station_lines=EMPTY_INDEX),
+)
+
+# --- 全路線補完 (小さなテスト用 index を注入) ---
+# Suumo が一部路線しか出さない駅を、アンカー路線で同定して全路線に広げる。
+TEST_INDEX = StationLineIndex(
+    {
+        "下高井戸": [{"lines": ["京王線", "東急世田谷線"], "pref_cd": 13, "station_g_cd": 1}],
+        "明大前": [{"lines": ["京王線", "京王井の頭線"], "pref_cd": 13, "station_g_cd": 2}],
+        # 同名異駅: 本町 (大阪・架空) と 本町 (東京・京王線) をアンカーで一意化。
+        "本町": [
+            {"lines": ["大阪メトロ御堂筋線", "大阪メトロ四つ橋線"], "pref_cd": 27, "station_g_cd": 3},
+            {"lines": ["京王線", "テスト線"], "pref_cd": 13, "station_g_cd": 4},
+        ],
+    }
+)
+check(
+    "補完: 下高井戸 (世田谷線のみ提示) → 京王線を末尾に追加",
+    _format_suumo_access("東急世田谷線/下高井戸駅 歩4分", station_lines=TEST_INDEX)
+    == [":tokyu-setagaya::keio: 下高井戸駅 歩4分"],
+    _format_suumo_access("東急世田谷線/下高井戸駅 歩4分", station_lines=TEST_INDEX),
+)
+check(
+    "補完: 明大前 (京王線のみ提示) → 井の頭線を追加",
+    _format_suumo_access("京王線/明大前駅 歩9分", station_lines=TEST_INDEX)
+    == [":keio::keio-inokashira: 明大前駅 歩9分"],
+    _format_suumo_access("京王線/明大前駅 歩9分", station_lines=TEST_INDEX),
+)
+check(
+    "complete: 提示順を保ち補完分を末尾に",
+    TEST_INDEX.complete(["東急世田谷線"], "下高井戸駅") == ["東急世田谷線", "京王線"],
+    TEST_INDEX.complete(["東急世田谷線"], "下高井戸駅"),
+)
+check(
+    "complete: 同名異駅をアンカー(京王線)で東京側に一意特定",
+    TEST_INDEX.complete(["京王線"], "本町駅") == ["京王線", "テスト線"],
+    TEST_INDEX.complete(["京王線"], "本町駅"),
+)
+check(
+    "complete: 辞書に無い駅は現状維持",
+    TEST_INDEX.complete(["JR山手線"], "新宿駅") == ["JR山手線"],
+    TEST_INDEX.complete(["JR山手線"], "新宿駅"),
+)
+check(
+    "complete: アンカー不一致は現状維持",
+    TEST_INDEX.complete(["東京メトロ丸ノ内線"], "下高井戸駅") == ["東京メトロ丸ノ内線"],
+    TEST_INDEX.complete(["東京メトロ丸ノ内線"], "下高井戸駅"),
+)
+check(
+    "identify: 引けない駅は None",
+    TEST_INDEX.identify("存在しない駅", ["京王線"]) is None,
+    TEST_INDEX.identify("存在しない駅", ["京王線"]),
+)
+check(
+    "空 index は常に補完なし",
+    EMPTY_INDEX.complete(["京王線"], "下高井戸駅") == ["京王線"],
+    None,
 )
 
 check("floors '6階'+'地下1地上35階建' → '6/35階'", _suumo_floors("6階", "地下1地上35階建") == "6/35階", _suumo_floors("6階", "地下1地上35階建"))
@@ -216,7 +282,7 @@ expected = "\n".join([
         ":seibu-ikebukuro::toei-oedo: 豊島園駅 歩11分",
     ]),
 ])
-got = _suumo_summary_line(prop)
+got = _suumo_summary_line(prop, station_lines=EMPTY_INDEX)
 check("summary 行が 3 行新フォーマットに一致 (物件別 commute)", got == expected, got)
 prop_no_commute = SuumoProperty(
     name="X", area="中央区", address="", access="", age="", building_floors="",
@@ -225,13 +291,38 @@ prop_no_commute = SuumoProperty(
 )
 check(
     "commute 空なら通勤を出さない",
-    "まで:" not in _suumo_summary_line(prop_no_commute),
-    _suumo_summary_line(prop_no_commute),
+    "まで:" not in _suumo_summary_line(prop_no_commute, station_lines=EMPTY_INDEX),
+    _suumo_summary_line(prop_no_commute, station_lines=EMPTY_INDEX),
 )
 check(
     "access 空なら駅行を出さない (2 行のみ)",
-    _suumo_summary_line(prop_no_commute).count("\n") == 1,
-    _suumo_summary_line(prop_no_commute),
+    _suumo_summary_line(prop_no_commute, station_lines=EMPTY_INDEX).count("\n") == 1,
+    _suumo_summary_line(prop_no_commute, station_lines=EMPTY_INDEX),
+)
+
+
+# --- station_lines ローダ round-trip (一時 JSON) ---
+print("\n=== 6. station_lines ローダ ===")
+with tempfile.TemporaryDirectory() as _d:
+    _p = Path(_d) / "station_lines.json"
+    _p.write_text(
+        json.dumps(
+            {"stations": {"下高井戸": [{"lines": ["京王線", "東急世田谷線"], "pref_cd": 13}]}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    check(
+        "load: JSON から読んで identify できる",
+        StationLineIndex.load(_p).identify("下高井戸駅", ["京王線"])
+        == ["京王線", "東急世田谷線"],
+        StationLineIndex.load(_p).identify("下高井戸駅", ["京王線"]),
+    )
+check(
+    "load: 不在パスは空 index に縮退 (補完なし)",
+    StationLineIndex.load(Path("/nonexistent/xxx.json")).complete(["京王線"], "下高井戸駅")
+    == ["京王線"],
+    None,
 )
 
 
