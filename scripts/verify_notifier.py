@@ -111,6 +111,17 @@ summarize_messages(
 print("\n--- Suumo サマリ行サンプル (3 行レイアウト) ---")
 print(_suumo_summary_line(suumo_props[0]))
 
+# サマリ: 物件名が太字か / 物件ブロック間に空行が入るか
+suumo_msgs = build_suumo_messages(suumo_diff, suumo_props, notify_config=cfg_default)
+summary_text = "\n".join(
+    b["text"]["text"]
+    for b in suumo_msgs[-1]["blocks"]
+    if b.get("type") == "section"
+)
+print("\n=== Suumo サマリ: 太字 + 物件間の空行 ===")
+print(f"  {'OK' if '*<https' in summary_text else 'FAIL'}: 物件名が太字 (*<url|name>*)")
+print(f"  {'OK' if chr(10) * 2 in summary_text else 'FAIL'}: 物件ブロック間に空行 (\\n\\n)")
+
 # ---------- 上限近傍テスト: 多数の added/removed で trim 確認 ----------
 
 many_added = [make_jkk(f"A{i}", f"r{i}", f"新着{i}") for i in range(40)]

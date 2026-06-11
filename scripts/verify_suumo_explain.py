@@ -209,7 +209,7 @@ prop = SuumoProperty(
     jnc="x", bc="y", detail_url="", commute="渋谷駅（20分・0回）",
 )
 expected = "\n".join([
-    "•  ディアマークスキャピタルタワー (練馬区)",
+    "•  *ディアマークスキャピタルタワー* (練馬区)",
     _SUMMARY_INDENT + "18万円 ・ 52.96m² ・ 6/35階 ・ 築26年 ・ 渋谷まで: 20分/0回",
     _SUMMARY_INDENT + _STATION_SEP.join([
         ":seibu-ikebukuro: 練馬駅 歩3分",

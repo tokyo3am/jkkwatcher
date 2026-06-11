@@ -279,12 +279,12 @@ def _suumo_summary_line(p: SuumoProperty) -> str:
     """物件 1 件を 3 行ブロックにする。
 
     例:
-        •  ファインスクェア明大前 (世田谷区)
+        •  *ファインスクェア明大前* (世田谷区)
              20万円 ・ 43.38m² ・ 3/5階 ・ 築6年 ・ 渋谷まで: 7分/0回
              :keio::tokyu-setagaya: 下高井戸駅 歩4分   :keio::keio-inokashira: 明大前駅 歩10分
     """
     name_md = f"<{p.detail_url}|{p.name}>" if p.detail_url else p.name
-    lines = [f"•  {name_md} ({p.area})"]
+    lines = [f"•  *{name_md}* ({p.area})"]
 
     meta = [
         p.rent,
@@ -317,6 +317,7 @@ class SourceRenderer:
     removed_label: str       # "件の物件が申し込まれました" 等
     card_formatter: Callable[[Any], list[dict[str, Any]]]
     summary_line_formatter: Callable[[Any], str]
+    summary_separator: str = "\n"  # サマリの物件ブロック間の区切り ("\n\n" で空行)
 
 
 JKK_RENDERER = SourceRenderer(
@@ -359,6 +360,7 @@ SUUMO_RENDERER = SourceRenderer(
     removed_label="件の物件が掲載終了しました",
     card_formatter=_suumo_card,
     summary_line_formatter=_suumo_summary_line,
+    summary_separator="\n\n",  # 物件と物件の間に空行を入れる
 )
 
 
@@ -529,18 +531,23 @@ def _build_diff_message(
     return _make_message(renderer, text=text, blocks=blocks)
 
 
-def _pack_lines_into_sections(lines: list[str]) -> list[dict[str, Any]]:
-    """各行を 3000 char 上限の section block にまとめる (詰めるだけ詰める)。"""
+def _pack_lines_into_sections(
+    lines: list[str], separator: str = "\n"
+) -> list[dict[str, Any]]:
+    """各行を 3000 char 上限の section block にまとめる (詰めるだけ詰める)。
+
+    separator は行 (= 物件ブロック) どうしの区切り。"\n\n" で物件間に空行が入る。
+    """
     sections: list[dict[str, Any]] = []
     cur_lines: list[str] = []
     cur_size = 0
     for line in lines:
-        addition = len(line) + (1 if cur_lines else 0)
+        addition = len(line) + (len(separator) if cur_lines else 0)
         if cur_lines and cur_size + addition > SECTION_TEXT_SAFE_LIMIT:
             sections.append(
                 {
                     "type": "section",
-                    "text": {"type": "mrkdwn", "text": "\n".join(cur_lines)},
+                    "text": {"type": "mrkdwn", "text": separator.join(cur_lines)},
                 }
             )
             cur_lines = [line]
@@ -552,7 +559,7 @@ def _pack_lines_into_sections(lines: list[str]) -> list[dict[str, Any]]:
         sections.append(
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": "\n".join(cur_lines)},
+                "text": {"type": "mrkdwn", "text": separator.join(cur_lines)},
             }
         )
     return sections
@@ -577,7 +584,7 @@ def _build_summary_messages(
         ]
 
     lines = [renderer.summary_line_formatter(p) for p in current]
-    sections = _pack_lines_into_sections(lines)
+    sections = _pack_lines_into_sections(lines, renderer.summary_separator)
 
     # 1 メッセージあたり: header (1) + sections (N) + context (1) <= BLOCKS_SAFE_LIMIT
     sections_per_message = max(1, BLOCKS_SAFE_LIMIT - 2)
