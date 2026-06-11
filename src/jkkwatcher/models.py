@@ -137,6 +137,7 @@ class SuumoProperty:
     bc: str                  # 建物コード (URL の bc=XXXXXXXXX)
     detail_url: str          # 詳細ページの絶対 URL
     thumbnail_url: str | None = None
+    commute: str = ""        # 目的駅までの所要時間・乗換 ("渋谷駅（20分・0回）")。検索に目的駅がある時のみ。
 
     @property
     def key(self) -> str:

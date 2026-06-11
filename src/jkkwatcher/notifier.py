@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, Callable, TypeVar
 
 import httpx
@@ -9,7 +9,6 @@ import httpx
 from .diff import Diff
 from .models import Property, PropertyLike, SuumoProperty, UrProperty
 from .scraper import INIT_URL
-from .suumo_explain import commute_to_station
 from .suumo_scraper import DEFAULT_SEARCH_URL as SUUMO_SEARCH_URL
 from .watchlist import NotifyConfig, Source
 
@@ -174,6 +173,18 @@ _SUUMO_ACCESS_RE = re.compile(r"^(.+?)/(.+?)\s*歩(\d+)分$")
 _FLOOR_NUM_RE = re.compile(r"(\d+)")
 _TOTAL_ABOVE_RE = re.compile(r"地上(\d+)階")  # "地下1地上35階建" → 35
 _TOTAL_KEN_RE = re.compile(r"(\d+)階建")  # "11階建" → 11
+_COMMUTE_RE = re.compile(r"^(.+?)駅（(.+?)）$")  # "渋谷駅（20分・0回）"
+
+
+def _format_commute(raw: str) -> str:
+    """物件の目的駅所要時間 "渋谷駅（20分・0回）" → "渋谷まで: 20分・0回"。
+
+    形式が違えば原文のまま (捏造しない)。空なら空。
+    """
+    if not raw:
+        return ""
+    m = _COMMUTE_RE.match(raw)
+    return f"{m.group(1)}まで: {m.group(2)}" if m else raw
 
 
 def _format_suumo_access(access: str) -> list[str]:
@@ -224,10 +235,11 @@ def _suumo_floors(floor: str, building_floors: str) -> str:
     return building_floors or ""
 
 
-def _suumo_summary_line(p: SuumoProperty, commute: str = "") -> str:
+def _suumo_summary_line(p: SuumoProperty) -> str:
     name_md = f"<{p.detail_url}|{p.name}>" if p.detail_url else p.name
     parts = [p.rent, p.floor_area, _suumo_floors(p.floor, p.building_floors), p.age]
     parts.extend(_format_suumo_access(p.access))
+    commute = _format_commute(p.commute)
     if commute:
         parts.append(commute)
     body = " / ".join(part for part in parts if part)
@@ -592,18 +604,8 @@ def build_suumo_messages(
     current: list[SuumoProperty],
     *,
     notify_config: NotifyConfig | None = None,
-    search_url: str | None = None,
 ) -> list[dict[str, Any]]:
-    # サマリ行末の「○○駅まで: N分・M回」は検索 URL (ekInput/tj/nk) 由来で全件共通。
-    # 通勤条件付き検索のときだけ summary formatter を差し替えて注入する。
-    renderer = SUUMO_RENDERER
-    commute = commute_to_station(search_url) if search_url else None
-    if commute:
-        renderer = replace(
-            SUUMO_RENDERER,
-            summary_line_formatter=lambda p: _suumo_summary_line(p, commute=commute),
-        )
-    return build_messages(diff, current, renderer, notify_config=notify_config)
+    return build_messages(diff, current, SUUMO_RENDERER, notify_config=notify_config)
 
 
 def notify_all(

@@ -39,6 +39,7 @@ _KU_RE = re.compile(r"^(\S+?[都道府県])?(\S+?[区市町村])")
 _DETAIL_RE = re.compile(r"(/chintai/jnc_\d+/)")
 _BC_RE = re.compile(r"[?&]bc=(\d+)")
 _JNC_RE = re.compile(r"jnc_(\d+)")
+_COMMUTE_NUM_RE = re.compile(r"^\d+\)")  # "1)渋谷駅（…）" の番号 prefix
 
 
 class SuumoScraperError(RuntimeError):
@@ -54,6 +55,20 @@ def _extract_ku(address: str) -> str:
 def _li_texts(td: Tag) -> list[str]:
     """セル内の <li> をテキスト化して返す。"""
     return [li.get_text(" ", strip=True) for li in td.find_all("li")]
+
+
+def _extract_commute(transfer_el: Tag | None) -> str:
+    """目的駅までの所要時間・乗換。'1)渋谷駅（20分・0回）' → '渋谷駅（20分・0回）'。
+
+    検索に目的駅 (ekInput) がある時のみ表示される。無ければ空文字。
+    """
+    if transfer_el is None:
+        return ""
+    for li in transfer_el.find_all("li"):
+        text = li.get_text(strip=True)
+        if "駅（" in text:
+            return _COMMUTE_NUM_RE.sub("", text).strip()
+    return ""
 
 
 def _clean_floor_area(text: str) -> str:
@@ -179,6 +194,9 @@ def _parse_cassette(cassette: Tag) -> list[SuumoProperty]:
     building_img = cassette.select_one(".cassetteitem_object-item img")
     building_thumb = _img_url(building_img)
 
+    # 目的駅までの所要時間・乗換 (建物単位。検索に目的駅がある時のみ)。
+    commute = _extract_commute(cassette.select_one(".cassetteitem_transfer"))
+
     rooms: list[SuumoProperty] = []
     for tbody in cassette.select("table.cassetteitem_other tbody"):
         tds = tbody.find_all("td")
@@ -234,6 +252,7 @@ def _parse_cassette(cassette: Tag) -> list[SuumoProperty]:
                 bc=bc,
                 detail_url=detail_url,
                 thumbnail_url=thumb,
+                commute=commute,
             )
         )
 

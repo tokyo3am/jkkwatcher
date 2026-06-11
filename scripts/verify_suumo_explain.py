@@ -12,6 +12,7 @@ from pathlib import Path
 from jkkwatcher.cli import SUUMO_URL_ENVVAR, _resolve_suumo_url
 from jkkwatcher.models import SuumoProperty
 from jkkwatcher.notifier import (
+    _format_commute,
     _format_suumo_access,
     _suumo_floors,
     _suumo_summary_line,
@@ -71,7 +72,17 @@ check("駅=渋谷", exp.station and exp.station.label == "渋谷", exp.station)
 check("賃料=〜20万円", exp.rent == "〜20万円", exp.rent)
 check("専有面積=40m²以上", exp.floor_area == "40m²以上", exp.floor_area)
 check("駅徒歩=徒歩10分以内", exp.walk_minutes == "徒歩10分以内", exp.walk_minutes)
-check("通勤=20分以内 / 乗換なし", exp.commute == "20分以内 / 乗換なし", exp.commute)
+check("通勤=渋谷まで: 20分以内 / 乗換なし (目的駅統合)", exp.commute == "渋谷まで: 20分以内 / 乗換なし", exp.commute)
+check(
+    "commute_to_station(DEFAULT)=='渋谷まで: 20分以内 / 乗換なし'",
+    commute_to_station(DEFAULT_SEARCH_URL) == "渋谷まで: 20分以内 / 乗換なし",
+    commute_to_station(DEFAULT_SEARCH_URL),
+)
+check(
+    "ekInput 無し URL は None (素の通勤条件にフォールバック)",
+    commute_to_station("https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&ta=13&tj=20&nk=0") is None,
+    commute_to_station("https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&ta=13&tj=20&nk=0"),
+)
 check("築年数=None (9999999)", exp.building_age is None, exp.building_age)
 check("並び順=専有面積が広い順", exp.sort_order and exp.sort_order.label == "専有面積が広い順", exp.sort_order)
 check("未解決パラメータなし", exp.unresolved == [], exp.unresolved)
@@ -133,14 +144,15 @@ with tempfile.TemporaryDirectory() as d:
 
 print("\n=== 5. サマリ新フォーマット ===")
 check(
-    "commute_to_station(DEFAULT)=='渋谷まで: 20分・0回'",
-    commute_to_station(DEFAULT_SEARCH_URL) == "渋谷まで: 20分・0回",
-    commute_to_station(DEFAULT_SEARCH_URL),
+    "_format_commute('渋谷駅（20分・0回）')=='渋谷まで: 20分・0回'",
+    _format_commute("渋谷駅（20分・0回）") == "渋谷まで: 20分・0回",
+    _format_commute("渋谷駅（20分・0回）"),
 )
+check("_format_commute('') == ''", _format_commute("") == "", _format_commute(""))
 check(
-    "ekInput/tj 無し URL は None",
-    commute_to_station("https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&ta=13") is None,
-    commute_to_station("https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&ta=13"),
+    "_format_commute 非該当は原文のまま",
+    _format_commute("バス15分") == "バス15分",
+    _format_commute("バス15分"),
 )
 
 raw_access = "西武有楽町線/練馬駅 歩3分 / 西武豊島線/豊島園駅 歩11分 / 都営大江戸線/豊島園駅 歩11分"
@@ -160,15 +172,25 @@ prop = SuumoProperty(
     name="ディアマークスキャピタルタワー", area="練馬区", address="",
     access=raw_access, age="築26年", building_floors="地下1地上35階建", floor="6階",
     layout="1LDK", floor_area="52.96m²", rent="18万円", common_fee="-",
-    jnc="x", bc="y", detail_url="",
+    jnc="x", bc="y", detail_url="", commute="渋谷駅（20分・0回）",
 )
 expected = (
     "• *ディアマークスキャピタルタワー* (練馬区) / 18万円 / 52.96m² / 6/35階 / 築26年"
     " / 西武有楽町線/練馬駅 歩3分 / 西武豊島線/都営大江戸線/豊島園駅 歩11分"
     " / 渋谷まで: 20分・0回"
 )
-got = _suumo_summary_line(prop, commute="渋谷まで: 20分・0回")
-check("summary 行が新フォーマットに一致", got == expected, got)
+got = _suumo_summary_line(prop)
+check("summary 行が新フォーマットに一致 (物件別 commute)", got == expected, got)
+prop_no_commute = SuumoProperty(
+    name="X", area="中央区", address="", access="", age="", building_floors="",
+    floor="2階", layout="1K", floor_area="25m²", rent="9万円", common_fee="-",
+    jnc="x", bc="y", detail_url="",
+)
+check(
+    "commute 空なら通勤を出さない",
+    "まで:" not in _suumo_summary_line(prop_no_commute),
+    _suumo_summary_line(prop_no_commute),
+)
 
 
 # ---------- 結果 ----------

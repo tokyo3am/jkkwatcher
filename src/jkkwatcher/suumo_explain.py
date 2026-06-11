@@ -328,22 +328,31 @@ def explain_url(
     return _build_explanation(url, query, codes, ta, online_keys)
 
 
-def commute_to_station(url: str, *, codes_path: Path = _DATA_PATH) -> str | None:
-    """検索 URL の起点駅(ekInput)+所要時間(tj)+乗換(nk) を「渋谷まで: 20分・0回」形式に。
+def _commute_label(
+    query: dict[str, list[str]], codes: dict, ta: str | None
+) -> str | None:
+    """目的駅(ekInput)への通勤フィルタを「渋谷まで: 20分以内 / 乗換なし」に統合。
 
-    通勤条件 (ekInput と tj) が無い検索では None を返す。辞書は offline 参照のみ。
+    tj/nk は検索の上限値なので `_fmt_commute` と同じ「〜以内 / 乗換なし」表現を使う
+    (物件ごとの実所要時間ではない)。目的駅 (ekInput) または通勤条件が無ければ None。
+    """
+    ek = _first(query, "ekInput")
+    if not ek:
+        return None
+    cond = _fmt_commute(_first(query, "tj"), _first(query, "nk"))
+    if not cond:
+        return None
+    station = _lookup(codes, "ek", ek.zfill(5), ta) or f"駅{ek}"
+    return f"{station}まで: {cond}"
+
+
+def commute_to_station(url: str, *, codes_path: Path = _DATA_PATH) -> str | None:
+    """検索 URL の目的駅(ekInput)への通勤フィルタを人間可読化する (explain 用)。
+
+    例: "渋谷まで: 20分以内 / 乗換なし"。目的駅 (ekInput) や通勤条件が無ければ None。
     """
     query = _parse_query(url)
-    ek = _first(query, "ekInput")
-    tj = _first(query, "tj")
-    if not ek or not tj:
-        return None
-    ta = _first(query, "ta")
-    codes = load_codes(codes_path)
-    station = _lookup(codes, "ek", ek.zfill(5), ta) or f"駅{ek}"
-    nk = _first(query, "nk")
-    tail = f"・{nk}回" if nk not in (None, "") else ""
-    return f"{station}まで: {tj}分{tail}"
+    return _commute_label(query, load_codes(codes_path), _first(query, "ta"))
 
 
 def _build_explanation(
@@ -376,7 +385,8 @@ def _build_explanation(
         rent=_fmt_rent(_first(query, "cb"), _first(query, "ct")),
         floor_area=_fmt_floor_area(_first(query, "mb"), _first(query, "mt")),
         walk_minutes=_fmt_walk(_first(query, "et")),
-        commute=_fmt_commute(_first(query, "tj"), _first(query, "nk")),
+        commute=_commute_label(query, codes, ta)
+        or _fmt_commute(_first(query, "tj"), _first(query, "nk")),
         building_age=_fmt_building_age(_first(query, "cn")),
         region=region,
         property_kind=property_kind,
