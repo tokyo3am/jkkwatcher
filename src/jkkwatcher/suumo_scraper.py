@@ -6,7 +6,7 @@ from urllib.parse import urlparse, urlunparse
 import httpx
 from bs4 import BeautifulSoup, Tag
 
-from .models import SuumoProperty
+from .models import SuumoProperty, select_suumo_representatives
 
 
 SITE_ORIGIN = "https://suumo.jp"
@@ -145,7 +145,11 @@ class SuumoScraper:
         return BeautifulSoup(resp.text, "lxml")
 
     def search(self) -> list[SuumoProperty]:
-        properties: list[SuumoProperty] = []
+        # 代表選択 (実名優先) は全 listing を見てから行うため、ここでは重複も
+        # 含め全件バッファする。seen_keys は「このページで新しい key が増えたか」
+        # = ページ終端判定のためだけに使う (実名が後ページに来ても終端は延ばさ
+        # ないが、代表候補としては拾う)。
+        buffer: list[SuumoProperty] = []
         seen_keys: set[str] = set()
 
         for page in range(1, _MAX_PAGES + 1):
@@ -157,17 +161,16 @@ class SuumoScraper:
             new_in_page = 0
             for cassette in cassettes:
                 for prop in _parse_cassette(cassette):
-                    if prop.key in seen_keys:
-                        continue
-                    seen_keys.add(prop.key)
-                    properties.append(prop)
-                    new_in_page += 1
+                    buffer.append(prop)
+                    if prop.key not in seen_keys:
+                        seen_keys.add(prop.key)
+                        new_in_page += 1
 
-            # 全件 dedupe で何も増えなければ終端。
+            # 新しい key が 1 件も増えなければ終端 (末尾ページ検知も兼ねる)。
             if new_in_page == 0:
                 break
 
-        return properties
+        return select_suumo_representatives(buffer)
 
 
 def _parse_cassette(cassette: Tag) -> list[SuumoProperty]:

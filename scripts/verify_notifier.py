@@ -96,7 +96,8 @@ suumo_props = [
         name=f"ファインスクェア明大前{i}", area="世田谷区", address="",
         access="京王線/明大前駅 歩10分 / 京王井の頭線/明大前駅 歩10分 / 東急世田谷線/下高井戸駅 歩4分",
         age="築6年", building_floors="地上5階建", floor=f"{i % 5 + 1}階",
-        layout="1LDK", floor_area="43.38m²", rent="20万円", common_fee="-",
+        # rent を per-i で変え、name 非依存の新 key でも 43 件が distinct になるよう保つ
+        layout="1LDK", floor_area="43.38m²", rent=f"{15 + i}万円", common_fee="-",
         jnc=f"jnc{i}", bc=f"bc{i}",
         detail_url=f"https://suumo.jp/chintai/jnc_{i:09d}/?bc=100{i:09d}",
         commute="渋谷駅（7分・0回）",
