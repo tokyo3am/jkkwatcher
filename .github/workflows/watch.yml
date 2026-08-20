@@ -54,6 +54,11 @@ jobs:
         if: contains(format(',{0},', inputs.targets), ',jkk,')
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          # Telegram は任意の二次チャンネル (watchlist ヒットのみ通知)。
+          # 未設定なら空文字が渡り、CLI 側で送信をスキップする。
+          # chat_id は厳密には秘密ではないが、通知先を晒さないため secrets に置く。
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           JKKWATCHER_CONFIG_JSON: ${{ vars.JKKWATCHER_CONFIG_JSON }}
         run: uv run jkkwatcher jkk watch --state state.json
 
@@ -61,6 +66,8 @@ jobs:
         if: always() && contains(format(',{0},', inputs.targets), ',ur,')
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           JKKWATCHER_CONFIG_JSON: ${{ vars.JKKWATCHER_CONFIG_JSON }}
         run: uv run jkkwatcher ur watch --state state-ur.json
 
@@ -68,6 +75,8 @@ jobs:
         if: always() && contains(format(',{0},', inputs.targets), ',suumo,')
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           JKKWATCHER_CONFIG_JSON: ${{ vars.JKKWATCHER_CONFIG_JSON }}
           # 未設定なら空文字 → CLI 側で組み込みデフォルト URL にフォールバック。
           # URL 差し替えは `gh variable set SUUMO_SEARCH_URL --body '<url>'` のみで可。

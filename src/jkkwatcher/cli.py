@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Sequence
 from enum import Enum
 from pathlib import Path
 from typing import Annotated
@@ -12,12 +13,21 @@ from rich.table import Table
 
 from . import diff as diff_mod
 from . import notifier
-from .models import KU_CODES, SKCS_CODES, Area, Property, SuumoProperty, UrProperty
+from . import telegram
+from .models import (
+    KU_CODES,
+    SKCS_CODES,
+    Area,
+    Property,
+    PropertyLike,
+    SuumoProperty,
+    UrProperty,
+)
 from .scraper import JkkScraper
 from .suumo_explain import SuumoSearchExplanation, explain_url
 from .suumo_scraper import DEFAULT_SEARCH_URL as SUUMO_DEFAULT_URL, SuumoScraper
 from .ur_scraper import UrScraper
-from .watchlist import NotifyConfig
+from .watchlist import NotifyConfig, Source
 
 
 class OutputFormat(str, Enum):
@@ -45,6 +55,63 @@ def _explain_to_stderr(url: str, show: bool) -> None:
         return
     explanation = explain_url(url, offline=True)
     _render_suumo_explain(explanation, OutputFormat.TABLE, Console(stderr=True))
+
+
+# ---------- Telegram 通知 (Slack と独立した二次チャンネル) ----------
+# 全差分をリッチに流す Slack と違い、watchlist ヒットのみをプレーンテキストで送る。
+
+
+def _telegram_hit_texts(
+    source: Source, added: Sequence[PropertyLike], notify_config: NotifyConfig
+) -> list[str]:
+    hits = [p for p in added if notify_config.is_hit(source, p)]
+    return telegram.build_hit_messages(source, hits)
+
+
+def _preview_telegram_hits(
+    console: Console,
+    source: Source,
+    added: Sequence[PropertyLike],
+    notify_config: NotifyConfig,
+) -> None:
+    """--dry-run 用。送るはずのテキストを stderr に出す (stdout の JSON を汚さない)。"""
+    texts = _telegram_hit_texts(source, added, notify_config)
+    if not texts:
+        console.print("[dim]Telegram: ウォッチ一致なし (送信対象なし)")
+        return
+    console.print(f"[bold]Telegram プレビュー ({len(texts)} メッセージ):[/bold]")
+    for text in texts:
+        # 物件名に "[" が含まれても rich markup として解釈させない。
+        console.print(text, markup=False, highlight=False)
+
+
+def _notify_telegram_hits(
+    console: Console,
+    source: Source,
+    added: Sequence[PropertyLike],
+    notify_config: NotifyConfig,
+    token: str | None,
+    chat_id: str | None,
+) -> None:
+    """watchlist ヒットがあれば Telegram に通知する。
+
+    両方未設定なら何もしない (Telegram は任意)。片方だけなら設定ミスとみなし、
+    警告してスキップする。送信失敗は握り潰さず raise させる: ヒット時しか送らない
+    ので、黙ってログに流すと見逃す。
+    """
+    if not token and not chat_id:
+        return
+    if not token or not chat_id:
+        console.print(
+            "[yellow]Telegram は TELEGRAM_BOT_TOKEN と TELEGRAM_CHAT_ID の"
+            "両方が必要です。通知をスキップしました。"
+        )
+        return
+    texts = _telegram_hit_texts(source, added, notify_config)
+    if not texts:
+        return
+    telegram.notify(token, chat_id, texts)
+    console.print(f"[green]Telegram に通知しました ({len(texts)} メッセージ)。")
 
 
 app = typer.Typer(
@@ -137,6 +204,22 @@ def jkk_watch(
             help="Slack Incoming Webhook URL (env: SLACK_WEBHOOK_URL)",
         ),
     ] = None,
+    telegram_token: Annotated[
+        str | None,
+        typer.Option(
+            "--telegram-token",
+            envvar="TELEGRAM_BOT_TOKEN",
+            help="Telegram Bot API token (env: TELEGRAM_BOT_TOKEN)",
+        ),
+    ] = None,
+    telegram_chat_id: Annotated[
+        str | None,
+        typer.Option(
+            "--telegram-chat-id",
+            envvar="TELEGRAM_CHAT_ID",
+            help="Telegram の送信先 chat ID (env: TELEGRAM_CHAT_ID)",
+        ),
+    ] = None,
     area: Annotated[
         Area, typer.Option("--area", "-a", help="検索エリア (ku=区部 / shi=市部)")
     ] = Area.KU,
@@ -180,6 +263,7 @@ def jkk_watch(
     payloads = notifier.build_jkk_messages(delta, current, notify_config=notify_config)
     if dry_run:
         typer.echo(json.dumps(payloads, ensure_ascii=False, indent=2))
+        _preview_telegram_hits(console, "jkk", delta.added, notify_config)
         return
 
     if not webhook:
@@ -192,6 +276,10 @@ def jkk_watch(
     notifier.notify_all(webhook, payloads)
     console.print(f"[green]Slack に通知しました ({len(payloads)} メッセージ)。")
     diff_mod.save_state(state, current)
+    # state 保存後に送る: Telegram が落ちても次回実行で Slack 通知が重複しない。
+    _notify_telegram_hits(
+        console, "jkk", delta.added, notify_config, telegram_token, telegram_chat_id
+    )
 
 
 @jkk_app.command("ids")
@@ -296,6 +384,22 @@ def ur_watch(
             help="Slack Incoming Webhook URL (env: SLACK_WEBHOOK_URL)",
         ),
     ] = None,
+    telegram_token: Annotated[
+        str | None,
+        typer.Option(
+            "--telegram-token",
+            envvar="TELEGRAM_BOT_TOKEN",
+            help="Telegram Bot API token (env: TELEGRAM_BOT_TOKEN)",
+        ),
+    ] = None,
+    telegram_chat_id: Annotated[
+        str | None,
+        typer.Option(
+            "--telegram-chat-id",
+            envvar="TELEGRAM_CHAT_ID",
+            help="Telegram の送信先 chat ID (env: TELEGRAM_CHAT_ID)",
+        ),
+    ] = None,
     skcs: Annotated[
         list[str] | None,
         typer.Option(
@@ -338,6 +442,7 @@ def ur_watch(
     payloads = notifier.build_ur_messages(delta, current, notify_config=notify_config)
     if dry_run:
         typer.echo(json.dumps(payloads, ensure_ascii=False, indent=2))
+        _preview_telegram_hits(console, "ur", delta.added, notify_config)
         return
 
     if not webhook:
@@ -350,6 +455,10 @@ def ur_watch(
     notifier.notify_all(webhook, payloads)
     console.print(f"[green]Slack に通知しました ({len(payloads)} メッセージ)。")
     diff_mod.save_state(state, current)
+    # state 保存後に送る: Telegram が落ちても次回実行で Slack 通知が重複しない。
+    _notify_telegram_hits(
+        console, "ur", delta.added, notify_config, telegram_token, telegram_chat_id
+    )
 
 
 @ur_app.command("ids")
@@ -456,6 +565,22 @@ def suumo_watch(
             help="Slack Incoming Webhook URL (env: SLACK_WEBHOOK_URL)",
         ),
     ] = None,
+    telegram_token: Annotated[
+        str | None,
+        typer.Option(
+            "--telegram-token",
+            envvar="TELEGRAM_BOT_TOKEN",
+            help="Telegram Bot API token (env: TELEGRAM_BOT_TOKEN)",
+        ),
+    ] = None,
+    telegram_chat_id: Annotated[
+        str | None,
+        typer.Option(
+            "--telegram-chat-id",
+            envvar="TELEGRAM_CHAT_ID",
+            help="Telegram の送信先 chat ID (env: TELEGRAM_CHAT_ID)",
+        ),
+    ] = None,
     url: Annotated[
         str | None,
         typer.Option(
@@ -505,6 +630,7 @@ def suumo_watch(
     payloads = notifier.build_suumo_messages(delta, current, notify_config=notify_config)
     if dry_run:
         typer.echo(json.dumps(payloads, ensure_ascii=False, indent=2))
+        _preview_telegram_hits(console, "suumo", delta.added, notify_config)
         return
 
     if not webhook:
@@ -517,6 +643,10 @@ def suumo_watch(
     notifier.notify_all(webhook, payloads)
     console.print(f"[green]Slack に通知しました ({len(payloads)} メッセージ)。")
     diff_mod.save_state(state, current)
+    # state 保存後に送る: Telegram が落ちても次回実行で Slack 通知が重複しない。
+    _notify_telegram_hits(
+        console, "suumo", delta.added, notify_config, telegram_token, telegram_chat_id
+    )
 
 
 @suumo_app.command("ids")
