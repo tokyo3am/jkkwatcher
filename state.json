@@ -1,0 +1,30 @@
+[
+  {
+    "name": "トミンハイム西五反田四丁目",
+    "area": "品川区",
+    "priority_type": "子育・高齢",
+    "house_type": "一般賃貸リニューアル",
+    "layout": "２ＬＤＫ",
+    "floor_area": "66.78",
+    "rent": "266,500",
+    "common_fee": "5,400",
+    "units": "1",
+    "room_id": "C5361",
+    "residence_code": "0980190",
+    "thumbnail_url": "https://jhomes.to-kousya.or.jp/mz_copyright/mobile/0980190/0980190000.jpg"
+  },
+  {
+    "name": "カーメスト用賀馬事公苑",
+    "area": "世田谷区",
+    "priority_type": "一般",
+    "house_type": "一般賃貸住宅（期限付）",
+    "layout": "３ＬＤＫ",
+    "floor_area": "65.27～75.68",
+    "rent": "297,500～362,500",
+    "common_fee": "10,000",
+    "units": "5",
+    "room_id": "L8856",
+    "residence_code": "1280950",
+    "thumbnail_url": "https://jhomes.to-kousya.or.jp/mz_copyright/mobile/1280950/128095001.jpg"
+  }
+]
