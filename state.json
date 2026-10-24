@@ -1,0 +1,72 @@
+[
+  {
+    "name": "カーメスト用賀馬事公苑",
+    "area": "世田谷区",
+    "priority_type": "一般",
+    "house_type": "一般賃貸住宅（期限付）",
+    "layout": "２ＬＤＫ",
+    "floor_area": "56.76～60.51",
+    "rent": "273,700～286,400",
+    "common_fee": "10,000",
+    "units": "2",
+    "room_id": "L8855",
+    "residence_code": "1280950",
+    "thumbnail_url": "https://jhomes.to-kousya.or.jp/mz_copyright/mobile/1280950/128095001.jpg"
+  },
+  {
+    "name": "カーメスト用賀馬事公苑",
+    "area": "世田谷区",
+    "priority_type": "一般",
+    "house_type": "一般賃貸住宅（期限付）",
+    "layout": "３ＬＤＫ",
+    "floor_area": "65.27～75.68",
+    "rent": "297,500～362,500",
+    "common_fee": "10,000",
+    "units": "4",
+    "room_id": "L8856",
+    "residence_code": "1280950",
+    "thumbnail_url": "https://jhomes.to-kousya.or.jp/mz_copyright/mobile/1280950/128095001.jpg"
+  },
+  {
+    "name": "カーメスト用賀馬事公苑",
+    "area": "世田谷区",
+    "priority_type": "一般",
+    "house_type": "一般賃貸住宅（期限付）",
+    "layout": "３ＬＤＫ",
+    "floor_area": "65.27～72.11",
+    "rent": "290,500～319,100",
+    "common_fee": "10,000",
+    "units": "2",
+    "room_id": "L8866",
+    "residence_code": "1280951",
+    "thumbnail_url": "https://jhomes.to-kousya.or.jp/mz_copyright/mobile/1280951/128095001.jpg"
+  },
+  {
+    "name": "コーシャハイム神宮前五丁目",
+    "area": "渋谷区",
+    "priority_type": "高齢",
+    "house_type": "一賃リニューアル（期限付）",
+    "layout": "１ＬＤＫ",
+    "floor_area": "41.0",
+    "rent": "172,200",
+    "common_fee": "5,000",
+    "units": "1",
+    "room_id": "H8021",
+    "residence_code": "1380100",
+    "thumbnail_url": "https://jhomes.to-kousya.or.jp/mz_copyright/mobile/1380100/1380100_00_202108.jpg"
+  },
+  {
+    "name": "コーシャハイム光が丘第一",
+    "area": "練馬区",
+    "priority_type": "子育・高齢",
+    "house_type": "一般賃貸住宅",
+    "layout": "３ＤＫ",
+    "floor_area": "60.17",
+    "rent": "102,100",
+    "common_fee": "3,200",
+    "units": "1",
+    "room_id": "A1482",
+    "residence_code": "2080060",
+    "thumbnail_url": "https://jhomes.to-kousya.or.jp/mz_copyright/mobile/2080060/2080060001.jpg"
+  }
+]
