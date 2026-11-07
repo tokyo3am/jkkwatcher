@@ -1,0 +1,38 @@
+[
+  {
+    "name": "フレール西新井第二",
+    "area": "足立区",
+    "address": "足立区西新井2-5ほか",
+    "access": "東武大師線「大師前」駅 徒歩9～12分 / 日暮里舎人ライナー「西新井大師西」駅 徒歩14～16分 / 東武伊勢崎線「西新井」駅 徒歩16～19分",
+    "layout": "1K",
+    "floor_area": "53㎡",
+    "floor": "2階",
+    "rent": "112,100円",
+    "common_fee": "6,600円",
+    "shisya": "20",
+    "danchi": "642",
+    "shikibetu": "0",
+    "room_id": "000090203",
+    "room_no": "203号室",
+    "detail_url": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_6420_room.html?JKSS=000090203",
+    "thumbnail_url": "https://chintai.r6.ur-net.go.jp/chintai/img_photo/20/20_642/20_642_photo_s.jpg"
+  },
+  {
+    "name": "パークサイド石神井",
+    "area": "練馬区",
+    "address": "練馬区石神井台3-26 ほか",
+    "access": "西武池袋線「大泉学園」駅 徒歩15～19分 / 西武池袋線「大泉学園」駅バス4分 徒歩6～9分 / 西武池袋線「石神井公園」駅 徒歩18～21分",
+    "layout": "2LDK",
+    "floor_area": "62㎡",
+    "floor": "2階",
+    "rent": "145,400円",
+    "common_fee": "9,900円",
+    "shisya": "20",
+    "danchi": "525",
+    "shikibetu": "0",
+    "room_id": "000010205",
+    "room_no": "205号室",
+    "detail_url": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_5250_room.html?JKSS=000010205",
+    "thumbnail_url": "https://chintai.r6.ur-net.go.jp/chintai/img_photo/20/20_525/20_525_photo_s.jpg"
+  }
+]
